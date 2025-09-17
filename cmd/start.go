@@ -1,9 +1,14 @@
 package cmd
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
+	"time"
 
 	"github.com/joho/godotenv"
 	"github.com/mark3labs/mcp-go/server"
@@ -242,20 +247,20 @@ func runStartServer(cmd *cobra.Command, args []string) error {
 		OtelProviders:     otelProviders,
 		Metrics:           mcpMetrics,
 	}
-	s, err := api.NewServer(opts)
+	backendServer, err := api.NewServer(opts)
 	if err != nil {
 		return fmt.Errorf("failed to create server: %v", err)
 	}
 
 	// determine server init status
-	ok, err := s.IsInitialized()
+	ok, err := backendServer.IsInitialized()
 	if err != nil {
 		return fmt.Errorf("failed to check if server is initialized: %v", err)
 	}
 	if ok {
 		// If the server is already initialized, then the mode supplied to this command (desired mode)
 		// must match the configured mode.
-		mode, err := s.GetMode()
+		mode, err := backendServer.GetMode()
 		if err != nil {
 			return fmt.Errorf("failed to get server mode: %v", err)
 		}
@@ -269,7 +274,7 @@ func runStartServer(cmd *cobra.Command, args []string) error {
 		// If server isn't already initialized and the desired mode is dev, silently initialize the server.
 		// Individual (dev mode) users need not worry about server initialization.
 		if desiredServerMode == model.ModeDev {
-			if err := s.InitDev(); err != nil {
+			if err := backendServer.InitDev(); err != nil {
 				return fmt.Errorf("failed to initialize server in development mode: %v", err)
 			}
 		} else {
@@ -282,11 +287,28 @@ func runStartServer(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Display startup banner when the server is started
+	// Display startup banner before server startup
 	cmd.Print(asciiArt)
 	cmd.Printf("MCPJungle HTTP server listening on :%s\n\n", bindPort)
-	if err := s.Start(); err != nil {
-		return fmt.Errorf("failed to run the server: %v", err)
+
+	go func() {
+		if err := backendServer.Start(); err != nil {
+			cmd.Printf("failed to run the server: %v\n\n", err)
+		}
+	}()
+
+	// Listen for interrupt signals, then proceed to shut down gracefully
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	<-sigCh
+
+	cmd.Println("Shutting down mcpjungle...")
+
+	// give the server a few seconds to wrap up, then force shut down
+	ctx, cancel := context.WithTimeout(cmd.Context(), 3*time.Second)
+	defer cancel()
+	if err := backendServer.Shutdown(ctx); err != nil && !errors.Is(err, context.DeadlineExceeded) {
+		return fmt.Errorf("failed to shut down server: %v", err)
 	}
 
 	return nil

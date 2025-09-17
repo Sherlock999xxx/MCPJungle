@@ -2,7 +2,10 @@
 package api
 
 import (
+	"context"
+	"errors"
 	"fmt"
+	"net/http"
 	"sync"
 
 	"github.com/gin-gonic/gin"
@@ -49,11 +52,14 @@ type ServerOptions struct {
 
 // Server represents the MCPJungle registry server that handles MCP proxy and API requests
 type Server struct {
-	port   string
-	router *gin.Engine
+	port       string
+	httpServer *http.Server
 
-	mcpProxyServer    *server.MCPServer
-	sseMcpProxyServer *server.MCPServer
+	mcpProxyServer     *server.MCPServer
+	mcpProxyHTTPServer *server.StreamableHTTPServer
+
+	sseMcpProxyServer  *server.MCPServer
+	sseProxyHTTPServer *server.SSEServer
 
 	mcpService       *mcp.MCPService
 	mcpClientService *mcpclient.McpClientService
@@ -86,12 +92,20 @@ func NewServer(opts *ServerOptions) (*Server, error) {
 		metrics:           opts.Metrics,
 	}
 
-	// Set up the router after the server is fully initialized
+	// Create the HTTP servers for the MCP proxy servers
+	s.mcpProxyHTTPServer = server.NewStreamableHTTPServer(s.mcpProxyServer)
+	s.sseProxyHTTPServer = server.NewSSEServer(s.sseMcpProxyServer)
+
+	// Set up the router & http server after the server is fully initialized
 	r, err := s.setupRouter()
 	if err != nil {
 		return nil, err
 	}
-	s.router = r
+
+	s.httpServer = &http.Server{
+		Addr:    ":" + s.port,
+		Handler: r,
+	}
 
 	return s, nil
 }
@@ -133,10 +147,41 @@ func (s *Server) InitDev() error {
 
 // Start runs the Gin server (blocking call)
 func (s *Server) Start() error {
-	if err := s.router.Run(":" + s.port); err != nil {
-		return fmt.Errorf("failed to run the server: %w", err)
+	err := s.httpServer.ListenAndServe()
+	if err != nil && !errors.Is(err, http.ErrServerClosed) {
+		return fmt.Errorf("failed to run the http server: %w", err)
 	}
 	return nil
+}
+
+// Shutdown gracefully shuts down the mcpjungle server and closes any open resources, including connections.
+func (s *Server) Shutdown(ctx context.Context) error {
+	// shutdown global MCP proxy servers
+	err := s.mcpProxyHTTPServer.Shutdown(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to shut down MCP proxy HTTP server: %w", err)
+	}
+
+	err = s.sseProxyHTTPServer.Shutdown(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to shut down SSE proxy HTTP server: %w", err)
+	}
+
+	// shutdown all SSE tool group proxies
+	s.groupSseServers.Range(func(key, value any) bool {
+		if sseServer, ok := value.(*server.SSEServer); ok {
+			if err := sseServer.Shutdown(ctx); err != nil {
+				fmt.Printf("failed to shut down group %s SSE HTTP server: %v\n", key, err)
+			}
+		}
+		return true
+	})
+
+	// TODO: shutdown of http server doesn't seem to gracefully terminate open SSE connections for clients. Fix this.
+	// the ctx deadline always exceeds if there's even a single open SSE connection.
+
+	// the main http server should be the last to shut down
+	return s.httpServer.Shutdown(ctx)
 }
 
 // setupRouter sets up the Gin router with the MCP proxy server and API endpoints.
@@ -165,12 +210,11 @@ func (s *Server) setupRouter() (*gin.Engine, error) {
 	requireProdMode := s.requireServerMode(model.ModeProd)
 
 	// Set up the MCP proxy server on /mcp
-	streamableHTTPServer := server.NewStreamableHTTPServer(s.mcpProxyServer)
 	r.Any(
 		"/mcp",
 		s.requireInitialized(),
 		s.checkAuthForMcpProxyAccess(),
-		gin.WrapH(streamableHTTPServer),
+		gin.WrapH(s.mcpProxyHTTPServer),
 	)
 
 	r.Any(
@@ -181,18 +225,17 @@ func (s *Server) setupRouter() (*gin.Engine, error) {
 	)
 
 	// Set up the SSE transport-based MCP proxy server for the global /sse endpoint
-	sseServer := server.NewSSEServer(s.sseMcpProxyServer)
 	r.Any(
 		"/sse",
 		s.requireInitialized(),
 		s.checkAuthForMcpProxyAccess(),
-		gin.WrapH(sseServer.SSEHandler()),
+		gin.WrapH(s.sseProxyHTTPServer.SSEHandler()),
 	)
 	r.Any(
 		"/message",
 		s.requireInitialized(),
 		s.checkAuthForMcpProxyAccess(),
-		gin.WrapH(sseServer.MessageHandler()),
+		gin.WrapH(s.sseProxyHTTPServer.MessageHandler()),
 	)
 
 	r.Any(
