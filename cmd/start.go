@@ -13,6 +13,7 @@ import (
 	"github.com/mcpjungle/mcpjungle/internal/model"
 	"github.com/mcpjungle/mcpjungle/internal/service/config"
 	"github.com/mcpjungle/mcpjungle/internal/service/mcp"
+	"github.com/mcpjungle/mcpjungle/internal/service/mcp/sessionmanager"
 	"github.com/mcpjungle/mcpjungle/internal/service/mcpclient"
 	"github.com/mcpjungle/mcpjungle/internal/service/toolgroup"
 	"github.com/mcpjungle/mcpjungle/internal/service/user"
@@ -198,10 +199,19 @@ func runStartServer(cmd *cobra.Command, args []string) error {
 		"0.0.1",
 		server.WithToolCapabilities(true),
 	)
+
+	// create the SSE MCP proxy server with session manager
+	sseSessionManager := sessionmanager.NewSSESessionManager()
+
+	sseProxyHooks := &server.Hooks{}
+	sseProxyHooks.AddOnRegisterSession(sseSessionManager.OnRegisterSession)
+	sseProxyHooks.AddOnUnregisterSession(sseSessionManager.OnUnregisterSession)
+
 	sseMcpProxyServer := server.NewMCPServer(
 		"MCPJungle Proxy MCP Server for SSE transport",
 		"0.0.1",
 		server.WithToolCapabilities(true),
+		server.WithHooks(sseProxyHooks),
 	)
 
 	mcpService, err := mcp.NewMCPService(dbConn, mcpProxyServer, sseMcpProxyServer, mcpMetrics)
