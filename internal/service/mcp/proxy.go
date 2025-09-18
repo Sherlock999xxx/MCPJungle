@@ -60,7 +60,7 @@ func (m *MCPService) MCPProxyToolCallHandler(ctx context.Context, request mcp.Ca
 	if serverModel.Transport == types.TransportSSE {
 		sess := server.ClientSessionFromContext(ctx)
 
-		mcpClient, err = m.sseConnManager.GetClient(ctx, sess.SessionID(), serverModel)
+		mcpClient, err = m.sseConnManager.GetClient(context.Background(), sess.SessionID(), serverModel)
 		if err != nil {
 			outcome = telemetry.ToolCallOutcomeError
 
