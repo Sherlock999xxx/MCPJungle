@@ -291,16 +291,23 @@ func runStartServer(cmd *cobra.Command, args []string) error {
 	cmd.Print(asciiArt)
 	cmd.Printf("MCPJungle HTTP server listening on :%s\n\n", bindPort)
 
+	serverStartErrCh := make(chan struct{})
 	go func() {
 		if err := backendServer.Start(); err != nil {
-			cmd.Printf("failed to run the server: %v\n\n", err)
+			cmd.Println("failed to run the server: %v", err)
+			close(serverStartErrCh)
 		}
 	}()
 
-	// Listen for interrupt signals, then proceed to shut down gracefully
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-	<-sigCh
+
+	// Listen for interrupt signals and server failures.
+	// If either is received, proceed to shut down gracefully
+	select {
+	case <-serverStartErrCh:
+	case <-sigCh:
+	}
 
 	cmd.Println("Shutting down mcpjungle...")
 
