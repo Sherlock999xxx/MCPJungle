@@ -219,7 +219,7 @@ func runStartServer(cmd *cobra.Command, args []string) error {
 		server.WithHooks(sseProxyHooks),
 	)
 
-	mcpService, err := mcp.NewMCPService(dbConn, mcpProxyServer, sseMcpProxyServer, mcpMetrics)
+	mcpService, err := mcp.NewMCPService(dbConn, mcpProxyServer, sseMcpProxyServer, sseSessionManager, mcpMetrics)
 	if err != nil {
 		return fmt.Errorf("failed to create MCP service: %v", err)
 	}

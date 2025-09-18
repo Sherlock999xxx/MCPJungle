@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/mark3labs/mcp-go/client"
 	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/mark3labs/mcp-go/server"
 	"github.com/mcpjungle/mcpjungle/internal/model"
 	"github.com/mcpjungle/mcpjungle/internal/telemetry"
 	"github.com/mcpjungle/mcpjungle/pkg/types"
@@ -42,7 +44,7 @@ func (m *MCPService) MCPProxyToolCallHandler(ctx context.Context, request mcp.Ca
 	}()
 
 	// get the MCP server details from the database
-	server, err := m.GetMcpServer(serverName)
+	serverModel, err := m.GetMcpServer(serverName)
 	if err != nil {
 		// TODO: differentiate between "server not found" and other errors.
 		// server not found is not an internal error, so outcome should be success.
@@ -53,12 +55,30 @@ func (m *MCPService) MCPProxyToolCallHandler(ctx context.Context, request mcp.Ca
 		)
 	}
 
-	mcpClient, err := newMcpServerSession(ctx, server)
-	if err != nil {
-		outcome = telemetry.ToolCallOutcomeError
-		return nil, err
+	var mcpClient *client.Client
+
+	if serverModel.Transport == types.TransportSSE {
+		sess := server.ClientSessionFromContext(ctx)
+
+		mcpClient, err = m.sseConnManager.GetClient(ctx, sess.SessionID(), serverModel)
+		if err != nil {
+			outcome = telemetry.ToolCallOutcomeError
+
+			return nil, fmt.Errorf(
+				"failed to get SSE client (downstream client session: %s, MCP server %s): %w",
+				sess.SessionID(),
+				serverName,
+				err,
+			)
+		}
+	} else {
+		mcpClient, err = newMcpServerSession(ctx, serverModel)
+		if err != nil {
+			outcome = telemetry.ToolCallOutcomeError
+			return nil, err
+		}
+		defer mcpClient.Close()
 	}
-	defer mcpClient.Close()
 
 	// Ensure the tool name is set correctly, ie, without the server name prefix
 	request.Params.Name = toolName
@@ -72,7 +92,7 @@ func (m *MCPService) MCPProxyToolCallHandler(ctx context.Context, request mcp.Ca
 	return res, err
 }
 
-// initMCPProxyServer initializes the MCP proxy server.
+// initMCPProxyServer initializes the MCP proxy servers.
 // It loads all the registered MCP tools from the database into the proxy server.
 func (m *MCPService) initMCPProxyServer() error {
 	mcpServerModelsCache := make(map[string]*model.McpServer)
