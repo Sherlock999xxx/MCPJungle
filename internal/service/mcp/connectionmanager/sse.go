@@ -1,4 +1,4 @@
-package sessionmanager
+package connectionmanager
 
 import (
 	"context"
@@ -17,10 +17,12 @@ import (
 // One map manages connections for one downstream client session.
 type upstreamMCPServerConnections map[string]*client.Client
 
-// SSESessionManager manages SSE sessions for mcpjungle.
+// SSEConnectionManager manages long-lived SSE connections for mcpjungle.
 // It keeps track of all connections with downstream sse clients and upstream sse servers.
-// It also maps the downstream clients to upstream servers.
-type SSESessionManager struct {
+// It also maps the clients to servers to ensure that:
+//   - any request sent by client reaches the server
+//   - any response or notifications send by server reached the client.
+type SSEConnectionManager struct {
 	mu       sync.Mutex
 	sessions map[string]upstreamMCPServerConnections
 }
@@ -28,14 +30,16 @@ type SSESessionManager struct {
 // ErrSessionNotFound is returned when a session is not found in the session manager.
 var ErrSessionNotFound = fmt.Errorf("session not found")
 
-func NewSSESessionManager() *SSESessionManager {
-	return &SSESessionManager{
+func NewSSEConnectionManager() *SSEConnectionManager {
+	return &SSEConnectionManager{
 		sessions: make(map[string]upstreamMCPServerConnections),
 	}
 }
 
 // OnRegisterSession is the callback function called by mcp-go hook when a new client registers with mcpjungle SSE mcp.
-func (m *SSESessionManager) OnRegisterSession(ctx context.Context, sess server.ClientSession) {
+// When a client just registers, it is not possible for mcpjungle to know which upstream server it wants to connect to.
+// So no connection is created at this stage. mcpjungle simply starts tracking the session.
+func (m *SSEConnectionManager) OnRegisterSession(ctx context.Context, sess server.ClientSession) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.sessions[sess.SessionID()] = make(upstreamMCPServerConnections)
@@ -43,7 +47,7 @@ func (m *SSESessionManager) OnRegisterSession(ctx context.Context, sess server.C
 
 // OnUnregisterSession is the callback function called by mcp-go hook when a client deregisters from mcpjungle SSE mcp.
 // It closes all upstream MCP server connections associated with this downstream client session.
-func (m *SSESessionManager) OnUnregisterSession(ctx context.Context, sess server.ClientSession) {
+func (m *SSEConnectionManager) OnUnregisterSession(ctx context.Context, sess server.ClientSession) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -61,15 +65,14 @@ func (m *SSESessionManager) OnUnregisterSession(ctx context.Context, sess server
 	delete(m.sessions, sess.SessionID())
 }
 
-// GetClient returns an existing connection to the given MCP server for the given downstream client session.
-// If no such connection exists, it creates a new one and caches it for subsequent calls.
-// The caller should not close the returned client. The session manager will close it when the downstream
-// client session is unregistered.
-func (m *SSESessionManager) GetClient(sessionID string, mcpServerModel *model.McpServer, mcpServer *server.MCPServer) (*client.Client, error) {
+// GetClient returns an existing connection that proxies messages between the given upstream MCP server and downstream client session.
+// If no such connection exists, this method creates a new one and caches it for subsequent requests.
+// The caller should not close the returned client. The session manager is responsible for the client's lifecycle.
+func (m *SSEConnectionManager) GetClient(clientSessionID string, mcpServerModel *model.McpServer, mcpServer *server.MCPServer) (*client.Client, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	sessConns, ok := m.sessions[sessionID]
+	sessConns, ok := m.sessions[clientSessionID]
 	if !ok {
 		return nil, ErrSessionNotFound
 	}
@@ -80,7 +83,7 @@ func (m *SSESessionManager) GetClient(sessionID string, mcpServerModel *model.Mc
 	}
 
 	// create a new connection
-	cli, err := m.createSseClient(sessionID, mcpServerModel, mcpServer)
+	cli, err := m.createSseClient(clientSessionID, mcpServerModel, mcpServer)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create a new sse client: %w", err)
 	}
@@ -91,38 +94,46 @@ func (m *SSESessionManager) GetClient(sessionID string, mcpServerModel *model.Mc
 	return cli, nil
 }
 
-func (m *SSESessionManager) createSseClient(sessionID string, mcpServerModel *model.McpServer, mcpServer *server.MCPServer) (*client.Client, error) {
+func (m *SSEConnectionManager) createSseClient(sessionID string, mcpServerModel *model.McpServer, mcpServer *server.MCPServer) (*client.Client, error) {
 	conf, err := mcpServerModel.GetSSEConfig()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get SSE transport config for MCP server: %w", err)
 	}
 
 	var opts []transport.ClientOption
+
+	// If bearer token is provided, set the Authorization header
 	if conf.BearerToken != "" {
-		// If bearer token is provided, set the Authorization header
 		o := transport.WithHeaders(map[string]string{
 			"Authorization": "Bearer " + conf.BearerToken,
 		})
 		opts = append(opts, o)
 	}
 
-	c, err := client.NewSSEMCPClient(conf.URL, opts...)
+	cli, err := client.NewSSEMCPClient(conf.URL, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create SSE client for MCP server: %w", err)
 	}
 
-	c.OnNotification(func(notification mcp.JSONRPCNotification) {
+	// when the client receives a notification from the upstream server,
+	// forward it to the downstream client session that the notification is meant for.
+	cli.OnNotification(func(notification mcp.JSONRPCNotification) {
 		err := mcpServer.SendNotificationToSpecificClient(sessionID, notification.Method, notification.Params.AdditionalFields)
 		if err != nil {
-			log.Printf("failed to send notification to downstream client (session: %s, mcp server: %s): %v\n", sessionID, mcpServerModel.Name, err)
+			log.Printf(
+				"failed to send notification to downstream client (session: %s, mcp server: %s): %v\n",
+				sessionID,
+				mcpServerModel.Name,
+				err,
+			)
 		}
 	})
 
-	// use background context for Start, as the caller may pass a context with a timeout or cancellation.
+	// use the background context to create the connection to avoid any ctx from closing the conn due to cancellation.
 	// The client connection should remain valid until the session is unregistered.
 	// The session manager will close the client then.
-	if err = c.Start(context.Background()); err != nil {
-		return nil, fmt.Errorf("failed to start SSE transport for MCP server: %w", err)
+	if err = cli.Start(context.Background()); err != nil {
+		return nil, fmt.Errorf("failed to start the SSE client for upstream MCP server: %w", err)
 	}
 
 	initReq := mcp.InitializeRequest{
@@ -132,10 +143,10 @@ func (m *SSESessionManager) createSseClient(sessionID string, mcpServerModel *mo
 			ClientInfo:      mcp.Implementation{Name: "mcpjungle-sse-proxy-client", Version: "0.1.0"},
 		},
 	}
-	_, err = c.Initialize(context.Background(), initReq)
+	_, err = cli.Initialize(context.Background(), initReq)
 	if err != nil {
 		return nil, fmt.Errorf("client failed to initialize connection with SSE MCP server: %w", err)
 	}
 
-	return c, nil
+	return cli, nil
 }

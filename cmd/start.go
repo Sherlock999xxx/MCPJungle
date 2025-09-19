@@ -18,7 +18,7 @@ import (
 	"github.com/mcpjungle/mcpjungle/internal/model"
 	"github.com/mcpjungle/mcpjungle/internal/service/config"
 	"github.com/mcpjungle/mcpjungle/internal/service/mcp"
-	"github.com/mcpjungle/mcpjungle/internal/service/mcp/sessionmanager"
+	"github.com/mcpjungle/mcpjungle/internal/service/mcp/connectionmanager"
 	"github.com/mcpjungle/mcpjungle/internal/service/mcpclient"
 	"github.com/mcpjungle/mcpjungle/internal/service/toolgroup"
 	"github.com/mcpjungle/mcpjungle/internal/service/user"
@@ -206,11 +206,11 @@ func runStartServer(cmd *cobra.Command, args []string) error {
 	)
 
 	// create the SSE MCP proxy server with session manager
-	sseSessionManager := sessionmanager.NewSSESessionManager()
+	sseConnManager := connectionmanager.NewSSEConnectionManager()
 
 	sseProxyHooks := &server.Hooks{}
-	sseProxyHooks.AddOnRegisterSession(sseSessionManager.OnRegisterSession)
-	sseProxyHooks.AddOnUnregisterSession(sseSessionManager.OnUnregisterSession)
+	sseProxyHooks.AddOnRegisterSession(sseConnManager.OnRegisterSession)
+	sseProxyHooks.AddOnUnregisterSession(sseConnManager.OnUnregisterSession)
 
 	sseMcpProxyServer := server.NewMCPServer(
 		"MCPJungle Proxy MCP Server for SSE transport",
@@ -219,7 +219,7 @@ func runStartServer(cmd *cobra.Command, args []string) error {
 		server.WithHooks(sseProxyHooks),
 	)
 
-	mcpService, err := mcp.NewMCPService(dbConn, mcpProxyServer, sseMcpProxyServer, sseSessionManager, mcpMetrics)
+	mcpService, err := mcp.NewMCPService(dbConn, mcpProxyServer, sseMcpProxyServer, sseConnManager, mcpMetrics)
 	if err != nil {
 		return fmt.Errorf("failed to create MCP service: %v", err)
 	}
@@ -291,21 +291,21 @@ func runStartServer(cmd *cobra.Command, args []string) error {
 	cmd.Print(asciiArt)
 	cmd.Printf("MCPJungle HTTP server listening on :%s\n\n", bindPort)
 
-	serverStartErrCh := make(chan struct{})
+	// start the server in a separate goroutine.
+	// the main goroutine will then wait for signals to gracefully shut down the server and close the app.
+	serverShutdownCh := make(chan struct{})
 	go func() {
 		if err := backendServer.Start(); err != nil {
-			cmd.Println("failed to run the server: %v", err)
-			close(serverStartErrCh)
+			cmd.Printf("failed to run the server: %v\n\n", err)
+			close(serverShutdownCh)
 		}
 	}()
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
-	// Listen for interrupt signals and server failures.
-	// If either is received, proceed to shut down gracefully
 	select {
-	case <-serverStartErrCh:
+	case <-serverShutdownCh:
 	case <-sigCh:
 	}
 
@@ -317,6 +317,11 @@ func runStartServer(cmd *cobra.Command, args []string) error {
 	if err := backendServer.Shutdown(ctx); err != nil && !errors.Is(err, context.DeadlineExceeded) {
 		return fmt.Errorf("failed to shut down server: %v", err)
 	}
+
+	// TODO: fix graceful shutdown
+	// For some reason, the server's Shutdown() doesn't close open SSE connections.
+	// If there's even a single open SSE conn, then Shutdown() only returns when the ctx deadline is exceeded.
+	// This needs to be investigated and fixed.
 
 	return nil
 }

@@ -7,7 +7,7 @@ import (
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
-	"github.com/mcpjungle/mcpjungle/internal/service/mcp/sessionmanager"
+	"github.com/mcpjungle/mcpjungle/internal/service/mcp/connectionmanager"
 	"github.com/mcpjungle/mcpjungle/internal/telemetry"
 	"gorm.io/gorm"
 )
@@ -20,7 +20,7 @@ type MCPService struct {
 	mcpProxyServer    *server.MCPServer
 	sseMcpProxyServer *server.MCPServer
 
-	sseConnManager *sessionmanager.SSESessionManager
+	sseConnManager *connectionmanager.SSEConnectionManager
 
 	// toolInstances keeps track of all the in-memory mcp.Tool instances, keyed by their unique names.
 	toolInstances map[string]mcp.Tool
@@ -42,7 +42,7 @@ func NewMCPService(
 	db *gorm.DB,
 	mcpProxyServer *server.MCPServer,
 	sseMcpProxyServer *server.MCPServer,
-	sseConnManager *sessionmanager.SSESessionManager,
+	sseConnManager *connectionmanager.SSEConnectionManager,
 	metrics telemetry.CustomMetrics,
 ) (*MCPService, error) {
 	s := &MCPService{

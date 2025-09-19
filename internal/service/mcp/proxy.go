@@ -118,22 +118,22 @@ func (m *MCPService) initMCPProxyServer() error {
 		// get the tool's MCP server so we can determine the transport type
 		// use a cache to avoid querying the DB multiple times for the same server
 		// since multiple tools can belong to the same server
-		var server *model.McpServer
+		var serverModel *model.McpServer
 		serverName, _, _ := splitServerToolName(tool.Name)
 
-		server, exists := mcpServerModelsCache[serverName]
+		serverModel, exists := mcpServerModelsCache[serverName]
 		if !exists {
-			server, err = m.GetMcpServer(serverName)
+			serverModel, err = m.GetMcpServer(serverName)
 			if err != nil {
 				return fmt.Errorf(
 					"init mcp proxy server: failed to get MCP server %s for tool %s from DB: %w", serverName, tool.Name, err,
 				)
 			}
 			// store the server model in cache so we don't have to query the DB again for the same server
-			mcpServerModelsCache[serverName] = server
+			mcpServerModelsCache[serverName] = serverModel
 		}
 
-		if server.Transport == types.TransportSSE {
+		if serverModel.Transport == types.TransportSSE {
 			m.sseMcpProxyServer.AddTool(tool, m.MCPProxyToolCallHandler)
 		} else {
 			m.mcpProxyServer.AddTool(tool, m.MCPProxyToolCallHandler)
