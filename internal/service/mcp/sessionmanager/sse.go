@@ -3,6 +3,7 @@ package sessionmanager
 import (
 	"context"
 	"fmt"
+	"log"
 	"sync"
 
 	"github.com/mark3labs/mcp-go/client"
@@ -64,7 +65,7 @@ func (m *SSESessionManager) OnUnregisterSession(ctx context.Context, sess server
 // If no such connection exists, it creates a new one and caches it for subsequent calls.
 // The caller should not close the returned client. The session manager will close it when the downstream
 // client session is unregistered.
-func (m *SSESessionManager) GetClient(ctx context.Context, sessionID string, mcpServer *model.McpServer) (*client.Client, error) {
+func (m *SSESessionManager) GetClient(sessionID string, mcpServerModel *model.McpServer, mcpServer *server.MCPServer) (*client.Client, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -73,25 +74,25 @@ func (m *SSESessionManager) GetClient(ctx context.Context, sessionID string, mcp
 		return nil, ErrSessionNotFound
 	}
 
-	cli, ok := sessConns[mcpServer.Name]
+	cli, ok := sessConns[mcpServerModel.Name]
 	if ok {
 		return cli, nil
 	}
 
 	// create a new connection
-	cli, err := m.createSseClient(ctx, mcpServer)
+	cli, err := m.createSseClient(sessionID, mcpServerModel, mcpServer)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create a new sse client: %w", err)
 	}
 
 	// cache the client for subsequent use
-	sessConns[mcpServer.Name] = cli
+	sessConns[mcpServerModel.Name] = cli
 
 	return cli, nil
 }
 
-func (m *SSESessionManager) createSseClient(ctx context.Context, mcpServer *model.McpServer) (*client.Client, error) {
-	conf, err := mcpServer.GetSSEConfig()
+func (m *SSESessionManager) createSseClient(sessionID string, mcpServerModel *model.McpServer, mcpServer *server.MCPServer) (*client.Client, error) {
+	conf, err := mcpServerModel.GetSSEConfig()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get SSE transport config for MCP server: %w", err)
 	}
@@ -111,10 +112,16 @@ func (m *SSESessionManager) createSseClient(ctx context.Context, mcpServer *mode
 	}
 
 	c.OnNotification(func(notification mcp.JSONRPCNotification) {
-		// TODO: send notification to downstream client session id
+		err := mcpServer.SendNotificationToSpecificClient(sessionID, notification.Method, notification.Params.AdditionalFields)
+		if err != nil {
+			log.Printf("failed to send notification to downstream client (session: %s, mcp server: %s): %v\n", sessionID, mcpServerModel.Name, err)
+		}
 	})
 
-	if err = c.Start(ctx); err != nil {
+	// use background context for Start, as the caller may pass a context with a timeout or cancellation.
+	// The client connection should remain valid until the session is unregistered.
+	// The session manager will close the client then.
+	if err = c.Start(context.Background()); err != nil {
 		return nil, fmt.Errorf("failed to start SSE transport for MCP server: %w", err)
 	}
 
@@ -125,7 +132,7 @@ func (m *SSESessionManager) createSseClient(ctx context.Context, mcpServer *mode
 			ClientInfo:      mcp.Implementation{Name: "mcpjungle-sse-proxy-client", Version: "0.1.0"},
 		},
 	}
-	_, err = c.Initialize(ctx, initReq)
+	_, err = c.Initialize(context.Background(), initReq)
 	if err != nil {
 		return nil, fmt.Errorf("client failed to initialize connection with SSE MCP server: %w", err)
 	}
