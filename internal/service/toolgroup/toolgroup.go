@@ -10,6 +10,7 @@ import (
 	"github.com/mark3labs/mcp-go/server"
 	"github.com/mcpjungle/mcpjungle/internal/model"
 	"github.com/mcpjungle/mcpjungle/internal/service/mcp"
+	"github.com/mcpjungle/mcpjungle/internal/service/mcp/connectionmanager"
 	"github.com/mcpjungle/mcpjungle/pkg/types"
 	"gorm.io/gorm"
 )
@@ -39,6 +40,8 @@ type ToolGroupService struct {
 	sseMcpServers map[string]*server.MCPServer
 	// sseMcpServerMu protects access to the sseMcpServers map
 	sseMcpServerMu sync.RWMutex
+
+	sseMcpServerConnManagers sync.Map
 }
 
 func NewToolGroupService(db *gorm.DB, mcpService *mcp.MCPService) (*ToolGroupService, error) {
@@ -51,6 +54,8 @@ func NewToolGroupService(db *gorm.DB, mcpService *mcp.MCPService) (*ToolGroupSer
 
 		sseMcpServers:  make(map[string]*server.MCPServer),
 		sseMcpServerMu: sync.RWMutex{},
+
+		sseMcpServerConnManagers: sync.Map{},
 	}
 
 	// register callbacks with mcp service to be notified when a tool gets added/removed
@@ -86,7 +91,9 @@ func (s *ToolGroupService) CreateToolGroup(group *model.ToolGroup) error {
 
 	// create the proxy MCP servers that expose only specified tools
 	mcpServer := s.newMCPServer(group.Name)
-	sseMcpServer := s.newSseMCPServer(group.Name)
+
+	sseConnManager := connectionmanager.NewSSEConnectionManager()
+	sseMcpServer := s.newSseMCPServer(group.Name, sseConnManager)
 
 	// populate the MCP servers with the specified tools
 	// this also has a side effect of validating that the tools exist in mcpjungle.
@@ -117,6 +124,8 @@ func (s *ToolGroupService) CreateToolGroup(group *model.ToolGroup) error {
 
 	// finally, add the proxy MCPs to the tool group MCPs manager so that it is ready to serve
 	s.addToolGroupMCPServer(group.Name, mcpServer)
+
+	s.addToolGroupSseConnManager(group.Name, sseConnManager)
 	s.addToolGroupSseMCPServer(group.Name, sseMcpServer)
 
 	return nil
@@ -161,6 +170,18 @@ func (s *ToolGroupService) GetToolGroupMCPServer(name string) (*server.MCPServer
 	return mcpServer, exists
 }
 
+func (s *ToolGroupService) GetToolGroupSseMCPServerConnManager(name string) (*connectionmanager.SSEConnectionManager, bool) {
+	mgrVal, exists := s.sseMcpServerConnManagers.Load(name)
+	if !exists {
+		return nil, false
+	}
+	mgr, ok := mgrVal.(*connectionmanager.SSEConnectionManager)
+	if !ok {
+		return nil, false
+	}
+	return mgr, true
+}
+
 // GetToolGroupSseMCPServer retrieves the SSE MCP proxy server for a given tool group name.
 func (s *ToolGroupService) GetToolGroupSseMCPServer(name string) (*server.MCPServer, bool) {
 	s.sseMcpServerMu.RLock()
@@ -179,12 +200,29 @@ func (s *ToolGroupService) newMCPServer(groupName string) *server.MCPServer {
 }
 
 // newSseMCPServer creates a new SSE MCP proxy server for a given tool group name.
-func (s *ToolGroupService) newSseMCPServer(groupName string) *server.MCPServer {
-	return server.NewMCPServer(
+func (s *ToolGroupService) newSseMCPServer(
+	groupName string, sseConnManager *connectionmanager.SSEConnectionManager,
+) *server.MCPServer {
+	sseProxyHooks := &server.Hooks{}
+	sseProxyHooks.AddOnRegisterSession(sseConnManager.OnRegisterSession)
+	sseProxyHooks.AddOnUnregisterSession(sseConnManager.OnUnregisterSession)
+
+	mcpServer := server.NewMCPServer(
 		fmt.Sprintf("MCPJungle proxy MCP server for SSE transport for tool group: %s", groupName),
 		"0.1.0",
 		server.WithToolCapabilities(true),
+		server.WithHooks(sseProxyHooks),
 	)
+
+	return mcpServer
+}
+
+func (s *ToolGroupService) addToolGroupSseConnManager(name string, mgr *connectionmanager.SSEConnectionManager) {
+	s.sseMcpServerConnManagers.Store(name, mgr)
+}
+
+func (s *ToolGroupService) deleteToolGroupSseConnManager(name string) {
+	s.sseMcpServerConnManagers.Delete(name)
 }
 
 // addToolGroupMCPServer adds or updates the MCP proxy server for a given tool group name.
@@ -217,6 +255,9 @@ func (s *ToolGroupService) deleteToolGroupMCPServers(name string) {
 	// proceed to delete both normal & sse proxies for the group, then release the locks
 	delete(s.mcpServers, name)
 	delete(s.sseMcpServers, name)
+
+	// delete the sse connection manager for the group
+	s.sseMcpServerConnManagers.Delete(name)
 }
 
 // initToolGroupMCPServers initializes the MCP proxy servers for all existing tool groups in the database.
@@ -235,7 +276,9 @@ func (s *ToolGroupService) initToolGroupMCPServers() error {
 		// TODO: Log a warning if a group has no tools, ie, len(toolNames) == 0
 
 		mcpServer := s.newMCPServer(group.Name)
-		sseMcpServer := s.newSseMCPServer(group.Name)
+
+		sseConnManager := connectionmanager.NewSSEConnectionManager()
+		sseMcpServer := s.newSseMCPServer(group.Name, sseConnManager)
 
 		for _, name := range toolNames {
 			tool, exists := s.mcpService.GetToolInstance(name)
@@ -259,6 +302,8 @@ func (s *ToolGroupService) initToolGroupMCPServers() error {
 		}
 
 		s.addToolGroupMCPServer(group.Name, mcpServer)
+
+		s.addToolGroupSseConnManager(group.Name, sseConnManager)
 		s.addToolGroupSseMCPServer(group.Name, sseMcpServer)
 	}
 

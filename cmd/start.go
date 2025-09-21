@@ -306,7 +306,8 @@ func runStartServer(cmd *cobra.Command, args []string) error {
 
 	select {
 	case <-serverShutdownCh:
-	case <-sigCh:
+	case sig := <-sigCh:
+		cmd.Printf("Received signal: %v\n\n", sig)
 	}
 
 	cmd.Println("Shutting down mcpjungle...")

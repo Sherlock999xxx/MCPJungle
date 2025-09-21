@@ -9,6 +9,7 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 	"github.com/mcpjungle/mcpjungle/internal/model"
+	"github.com/mcpjungle/mcpjungle/internal/service/mcp/connectionmanager"
 	"github.com/mcpjungle/mcpjungle/internal/telemetry"
 	"github.com/mcpjungle/mcpjungle/pkg/types"
 )
@@ -61,7 +62,22 @@ func (m *MCPService) MCPProxyToolCallHandler(ctx context.Context, request mcp.Ca
 		sess := server.ClientSessionFromContext(ctx)
 		mcpServer := server.ServerFromContext(ctx)
 
-		mcpClient, err = m.sseConnManager.GetClient(sess.SessionID(), serverModel, mcpServer)
+		// by default, assume  that the tool call is being made from the global MCP proxy server
+		// and use its SSE connection manager. However, if the tool call is being made from
+		// within a tool group context, then use the tool group's SSE connection manager instead.
+		// The group's manager is passed down here via the request context.
+		sseConnManager := m.sseConnManager
+		groupSseConnManagerVal := ctx.Value("sseConnManager")
+		if groupSseConnManagerVal != nil {
+			groupSseConnManager, ok := groupSseConnManagerVal.(*connectionmanager.SSEConnectionManager)
+			if ok {
+				sseConnManager = groupSseConnManager
+			}
+		}
+
+		// use the SSE connection manager to get the connection
+		// between the downstream client session and the upstream MCP server
+		mcpClient, err = sseConnManager.GetClient(sess.SessionID(), serverModel, mcpServer)
 		if err != nil {
 			outcome = telemetry.ToolCallOutcomeError
 

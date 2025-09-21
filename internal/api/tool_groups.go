@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -101,6 +102,16 @@ func (s *Server) deleteToolGroupHandler() gin.HandlerFunc {
 			return
 		}
 
+		// Shutdown the SSE proxy http server and delete it before deleting the tool group
+		if err := s.deleteGroupSseProxyHTTPServer(c, name); err != nil {
+			c.JSON(
+				http.StatusInternalServerError,
+				gin.H{"error": fmt.Sprintf("failed to delete SSE HTTP proxy server for group %s: %v", name, err)},
+			)
+			return
+		}
+
+		// Delete the tool group
 		err := s.toolGroupService.DeleteToolGroup(name)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -135,11 +146,11 @@ func (s *Server) toolGroupMCPServerCallHandler() gin.HandlerFunc {
 	}
 }
 
-// getGroupSseServer returns a server.SSEServer for a specific group, creating one if it doesn't already exist.
+// getGroupSseProxyHTTPServer returns a server.SSEServer for a specific group, creating one if it doesn't already exist.
 // It ensures that each tool group has its own SSE server with the correct dynamic base path.
-func (s *Server) getGroupSseServer(groupName string) (*server.SSEServer, error) {
+func (s *Server) getGroupSseProxyHTTPServer(groupName string) (*server.SSEServer, error) {
 	// Try to get existing server first
-	if serverVal, ok := s.groupSseServers.Load(groupName); ok {
+	if serverVal, ok := s.groupSseProxyHTTPServers.Load(groupName); ok {
 		return serverVal.(*server.SSEServer), nil
 	}
 
@@ -159,9 +170,32 @@ func (s *Server) getGroupSseServer(groupName string) (*server.SSEServer, error) 
 	)
 
 	// Store for future use
-	s.groupSseServers.Store(groupName, sseServer)
+	s.groupSseProxyHTTPServers.Store(groupName, sseServer)
 
 	return sseServer, nil
+}
+
+// deleteGroupSseProxyHTTPServer gracefully shuts down and deletes the SSE HTTP proxy server for the specified group.
+// This should be called to clean up resources when a tool group is being deleted.
+func (s *Server) deleteGroupSseProxyHTTPServer(ctx context.Context, groupName string) error {
+	// Try to get existing server first
+	serverVal, ok := s.groupSseProxyHTTPServers.Load(groupName)
+	if !ok {
+		// Server does not exist, nothing to do
+		return nil
+	}
+
+	sseServer := serverVal.(*server.SSEServer)
+
+	// Shutdown the server gracefully
+	if err := sseServer.Shutdown(ctx); err != nil {
+		return fmt.Errorf("failed to shutdown SSE HTTP proxy server for group %s: %w", groupName, err)
+	}
+
+	// Remove from the map
+	s.groupSseProxyHTTPServers.Delete(groupName)
+
+	return nil
 }
 
 // toolGroupSseMCPServerCallHandler handles SSE connection requests (/sse) for a specific tool group.
@@ -169,7 +203,7 @@ func (s *Server) toolGroupSseMCPServerCallHandler() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		groupName := c.Param("name")
 
-		groupSseMcpServer, err := s.getGroupSseServer(groupName)
+		groupSseMcpServer, err := s.getGroupSseProxyHTTPServer(groupName)
 		if err != nil {
 			c.JSON(
 				http.StatusNotFound,
@@ -178,6 +212,7 @@ func (s *Server) toolGroupSseMCPServerCallHandler() gin.HandlerFunc {
 			return
 		}
 
+		c.Set("group", groupName)
 		groupSseMcpServer.SSEHandler().ServeHTTP(c.Writer, c.Request)
 	}
 }
@@ -187,7 +222,7 @@ func (s *Server) toolGroupSseMCPServerCallMessageHandler() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		groupName := c.Param("name")
 
-		groupSseMcpServer, err := s.getGroupSseServer(groupName)
+		groupSseMcpServer, err := s.getGroupSseProxyHTTPServer(groupName)
 		if err != nil {
 			c.JSON(
 				http.StatusNotFound,
@@ -196,7 +231,21 @@ func (s *Server) toolGroupSseMCPServerCallMessageHandler() gin.HandlerFunc {
 			return
 		}
 
-		groupSseMcpServer.MessageHandler().ServeHTTP(c.Writer, c.Request)
+		// Pass the group SSE MCP server connection manager to the tool call handler.
+		// This allows the tool call handler to get the correct upstream MCP server connection
+		// for the given tool group.
+		groupSseMcpServerConnManager, ok := s.toolGroupService.GetToolGroupSseMCPServerConnManager(groupName)
+		if !ok {
+			c.JSON(
+				http.StatusInternalServerError,
+				gin.H{"error": fmt.Sprintf("failed to get SSE connection manager for tool group: %s", groupName)},
+			)
+			return
+		}
+		ctx := context.WithValue(c.Request.Context(), "sseConnManager", groupSseMcpServerConnManager)
+		req := c.Request.WithContext(ctx)
+
+		groupSseMcpServer.MessageHandler().ServeHTTP(c.Writer, req)
 	}
 }
 

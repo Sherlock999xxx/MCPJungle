@@ -55,26 +55,34 @@ type Server struct {
 	port       string
 	httpServer *http.Server
 
-	mcpProxyServer     *server.MCPServer
+	// mcpProxyServer is the global MCP proxy server instance meant for the /mcp endpoint.
+	// It handles tools for MCP servers using stdio or streamable http transport.
+	mcpProxyServer *server.MCPServer
+	// mcpProxyHTTPServer serves the /mcp endpoint
 	mcpProxyHTTPServer *server.StreamableHTTPServer
 
-	sseMcpProxyServer  *server.MCPServer
+	// sseMcpProxyServer is the global MCP proxy server instance meant for the /sse & /message endpoints
+	// It handles tools for MCP servers using the SSE transport.
+	sseMcpProxyServer *server.MCPServer
+	// sseProxyHTTPServer serves the /sse & /message endpoints
 	sseProxyHTTPServer *server.SSEServer
 
 	mcpService       *mcp.MCPService
 	mcpClientService *mcpclient.McpClientService
 
-	configService    *config.ServerConfigService
+	// configService manages configurations for the mcpjungle server
+	configService *config.ServerConfigService
+
 	userService      *user.UserService
 	toolGroupService *toolgroup.ToolGroupService
 
 	otelProviders *telemetry.Providers
 	metrics       telemetry.CustomMetrics
 
-	// groupMcpServers keeps track of mcp-go's server.SSEServer instances created for each tool group.
+	// groupSseProxyHTTPServers keeps track of mcp-go's server.SSEServer instances created for each tool group.
 	// These instances serve the requests made to tool groups' SSE tools.
 	// We need to maintain one instance for each group for sse to work correctly.
-	groupSseServers sync.Map
+	groupSseProxyHTTPServers sync.Map
 }
 
 // NewServer initializes a new Gin server for MCPJungle registry and MCP proxy
@@ -168,7 +176,7 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	}
 
 	// shutdown all SSE tool group proxies
-	s.groupSseServers.Range(func(key, value any) bool {
+	s.groupSseProxyHTTPServers.Range(func(key, value any) bool {
 		if sseServer, ok := value.(*server.SSEServer); ok {
 			if err := sseServer.Shutdown(ctx); err != nil {
 				fmt.Printf("failed to shut down group %s SSE HTTP server: %v\n", key, err)
