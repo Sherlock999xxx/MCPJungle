@@ -195,6 +195,7 @@ func (s *ToolGroupService) newMCPServer(groupName string) *server.MCPServer {
 	return server.NewMCPServer(
 		fmt.Sprintf("MCPJungle proxy MCP server for tool group: %s", groupName),
 		"0.1.0",
+		server.WithLogging(),
 		server.WithToolCapabilities(true),
 	)
 }
@@ -210,6 +211,7 @@ func (s *ToolGroupService) newSseMCPServer(
 	mcpServer := server.NewMCPServer(
 		fmt.Sprintf("MCPJungle proxy MCP server for SSE transport for tool group: %s", groupName),
 		"0.1.0",
+		server.WithLogging(),
 		server.WithToolCapabilities(true),
 		server.WithHooks(sseProxyHooks),
 	)

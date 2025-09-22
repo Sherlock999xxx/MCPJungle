@@ -202,6 +202,7 @@ func runStartServer(cmd *cobra.Command, args []string) error {
 	mcpProxyServer := server.NewMCPServer(
 		"MCPJungle Proxy MCP Server",
 		"0.0.1",
+		server.WithLogging(),
 		server.WithToolCapabilities(true),
 	)
 
@@ -215,6 +216,7 @@ func runStartServer(cmd *cobra.Command, args []string) error {
 	sseMcpProxyServer := server.NewMCPServer(
 		"MCPJungle Proxy MCP Server for SSE transport",
 		"0.0.1",
+		server.WithLogging(),
 		server.WithToolCapabilities(true),
 		server.WithHooks(sseProxyHooks),
 	)
