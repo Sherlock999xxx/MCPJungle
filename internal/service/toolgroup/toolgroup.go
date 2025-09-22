@@ -221,10 +221,6 @@ func (s *ToolGroupService) addToolGroupSseConnManager(name string, mgr *connecti
 	s.sseMcpServerConnManagers.Store(name, mgr)
 }
 
-func (s *ToolGroupService) deleteToolGroupSseConnManager(name string) {
-	s.sseMcpServerConnManagers.Delete(name)
-}
-
 // addToolGroupMCPServer adds or updates the MCP proxy server for a given tool group name.
 // If a group with the same name already exists, it will be replaced.
 // This method is safe to call concurrently.
