@@ -54,8 +54,11 @@ func TestServer_Start(t *testing.T) {
 		router := gin.New()
 
 		server := &Server{
-			port:   "invalid-port",
-			router: router,
+			port: "invalid-port",
+		}
+		server.httpServer = &http.Server{
+			Addr:    ":" + server.port,
+			Handler: router,
 		}
 
 		// This should return an error due to invalid port
