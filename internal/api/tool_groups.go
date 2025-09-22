@@ -179,21 +179,22 @@ func (s *Server) getGroupSseProxyHTTPServer(groupName string) (*server.SSEServer
 // This should be called to clean up resources when a tool group is being deleted.
 func (s *Server) deleteGroupSseProxyHTTPServer(ctx context.Context, groupName string) error {
 	// Try to get existing server first
-	serverVal, ok := s.groupSseProxyHTTPServers.Load(groupName)
+	serverVal, ok := s.groupSseProxyHTTPServers.LoadAndDelete(groupName)
 	if !ok {
 		// Server does not exist, nothing to do
 		return nil
 	}
 
-	sseServer := serverVal.(*server.SSEServer)
+	sseServer, ok := serverVal.(*server.SSEServer)
+	if !ok {
+		// todo: this shouldn't happen, log an error
+		return nil
+	}
 
 	// Shutdown the server gracefully
 	if err := sseServer.Shutdown(ctx); err != nil {
 		return fmt.Errorf("failed to shutdown SSE HTTP proxy server for group %s: %w", groupName, err)
 	}
-
-	// Remove from the map
-	s.groupSseProxyHTTPServers.Delete(groupName)
 
 	return nil
 }
