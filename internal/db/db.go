@@ -3,13 +3,13 @@ package db
 
 import (
 	"fmt"
-	"log"
 	"os"
 
 	"github.com/glebarez/sqlite"
+	"github.com/mcpjungle/mcpjungle/pkg/logger"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
-	"gorm.io/gorm/logger"
+	gormlogger "gorm.io/gorm/logger"
 )
 
 // TODO: Turn this into a singleton class.
@@ -22,7 +22,7 @@ const (
 
 // getSQLiteDBPath determines which SQLite database file to use.
 // It prioritizes the new mcpjungle.db file, but falls back to the old mcp.db file for backward compatibility.
-func getSQLiteDBPath() string {
+func getSQLiteDBPath(log logger.Logger) string {
 	// Check if the new database file exists
 	if _, err := os.Stat(dbFilename); err == nil {
 		return dbFilename
@@ -30,7 +30,13 @@ func getSQLiteDBPath() string {
 
 	// Check if the old database file exists (backward compatibility)
 	if _, err := os.Stat(deprecatedDBFilename); err == nil {
-		log.Printf("[db] WARNING: Using deprecated database file '%s'. Please consider renaming it to '%s' for future compatibility.", deprecatedDBFilename, dbFilename)
+		log.Warn(
+			fmt.Sprintf(
+				"Using deprecated database file '%s', consider renaming it to '%s' for future compatibility",
+				deprecatedDBFilename,
+				dbFilename,
+			),
+		)
 		return deprecatedDBFilename
 	}
 
@@ -42,18 +48,21 @@ func getSQLiteDBPath() string {
 // If the DSN is empty, it falls back to an embedded SQLite database.
 // For backward compatibility, it will use an existing "mcp.db" file if present,
 // otherwise it creates/uses "mcpjungle.db".
-func NewDBConnection(dsn string) (*gorm.DB, error) {
+func NewDBConnection(log logger.Logger, dsn string) (*gorm.DB, error) {
 	var dialector gorm.Dialector
 	if dsn == "" {
-		dbPath := getSQLiteDBPath()
-		log.Printf("[db] DATABASE_URL not set – falling back to embedded SQLite ./%s", dbPath)
+		dbPath := getSQLiteDBPath(log)
+		log.Info(
+			"Database URL not set, falling back to embedded SQLite",
+			logger.Field{Key: "db_filename", Value: dbPath},
+		)
 		dialector = sqlite.Open(fmt.Sprintf("%s?_busy_timeout=5000&_journal_mode=WAL", dbPath))
 	} else {
 		dialector = postgres.Open(dsn)
 	}
 
 	c := &gorm.Config{
-		Logger: logger.Default.LogMode(logger.Silent),
+		Logger: gormlogger.Default.LogMode(gormlogger.Silent),
 	}
 	db, err := gorm.Open(dialector, c)
 	if err != nil {

@@ -18,6 +18,7 @@ import (
 	"github.com/mcpjungle/mcpjungle/internal/service/toolgroup"
 	"github.com/mcpjungle/mcpjungle/internal/service/user"
 	"github.com/mcpjungle/mcpjungle/internal/telemetry"
+	"github.com/mcpjungle/mcpjungle/pkg/logger"
 	"github.com/spf13/cobra"
 )
 
@@ -248,6 +249,17 @@ func runStartServer(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
+	var log logger.Logger
+	if desiredServerMode == model.ModeDev {
+		log, err = logger.NewDevelopment()
+	} else {
+		log, err = logger.NewProduction()
+	}
+	if err != nil {
+		return fmt.Errorf("failed to create logger: %v", err)
+	}
+	defer log.Sync()
+
 	// Initialize metrics if enabled
 	telemetryEnabled, err := isTelemetryEnabled(desiredServerMode)
 	if err != nil {
@@ -297,7 +309,7 @@ func runStartServer(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	dbConn, err := db.NewDBConnection(dsn)
+	dbConn, err := db.NewDBConnection(log, dsn)
 	if err != nil {
 		return err
 	}
