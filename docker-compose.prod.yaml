@@ -38,6 +38,7 @@ services:
       DATABASE_URL: postgres://mcpjungle:mcpjungle@db:5432/mcpjungle
       SERVER_MODE: ${SERVER_MODE:-enterprise}
       OTEL_ENABLED: ${OTEL_ENABLED:-true}
+      MCP_SERVER_INIT_REQ_TIMEOUT_SEC: ${MCP_SERVER_INIT_REQ_TIMEOUT_SEC:-10}
     ports:
      - "${HOST_PORT:-8080}:8080"
     # volumes:
