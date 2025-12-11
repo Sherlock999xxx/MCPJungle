@@ -2,8 +2,10 @@ package cmd
 
 import (
 	"fmt"
+	"log"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/joho/godotenv"
@@ -36,6 +38,16 @@ const (
 	PostgresUserEnvVar     = "POSTGRES_USER"
 	PostgresPasswordEnvVar = "POSTGRES_PASSWORD"
 	PostgresDBEnvVar       = "POSTGRES_DB"
+)
+
+const (
+	// McpServerInitReqTimeoutSecEnvVar is the environment variable for configuring
+	// the MCP server initialization request timeout.
+	McpServerInitReqTimeoutSecEnvVar = "MCP_SERVER_INIT_REQ_TIMEOUT_SEC"
+
+	// McpServerInitRequestTimeoutSecondsDefault is the default timeout in seconds for MCP server
+	// initialization requests.
+	McpServerInitRequestTimeoutSecondsDefault = 10
 )
 
 var (
@@ -240,6 +252,23 @@ func getPostgresDSN() (string, bool, error) {
 	return dsn, true, nil
 }
 
+// getMcpServerInitReqTimeout returns the timeout (in seconds) for MCP server initialization requests.
+// If the corresponding environment variable is not set, it returns the default value.
+// If the value is invalid, it returns an error.
+func getMcpServerInitReqTimeout() (int, error) {
+	timeoutStr := strings.TrimSpace(os.Getenv(McpServerInitReqTimeoutSecEnvVar))
+	if timeoutStr == "" {
+		return McpServerInitRequestTimeoutSecondsDefault, nil
+	}
+	timeout, err := strconv.Atoi(timeoutStr)
+	if err != nil || timeout < 1 {
+		return 0, fmt.Errorf(
+			"invalid value for %s: '%s', must be a positive integer", McpServerInitReqTimeoutSecEnvVar, timeoutStr,
+		)
+	}
+	return timeout, nil
+}
+
 func runStartServer(cmd *cobra.Command, args []string) error {
 	_ = godotenv.Load()
 
@@ -324,7 +353,20 @@ func runStartServer(cmd *cobra.Command, args []string) error {
 		server.WithPromptCapabilities(true),
 	)
 
-	mcpService, err := mcp.NewMCPService(dbConn, mcpProxyServer, sseMcpProxyServer, mcpMetrics)
+	timeout, err := getMcpServerInitReqTimeout()
+	if err != nil {
+		return err
+	}
+	log.Printf("[server] timeout for initialization requests to MCP servers is %d seconds\n", timeout)
+
+	mcpServiceConfig := &mcp.ServiceConfig{
+		Db:                      dbConn,
+		McpProxyServer:          mcpProxyServer,
+		SseMcpProxyServer:       sseMcpProxyServer,
+		Metrics:                 mcpMetrics,
+		McpServerInitReqTimeout: timeout,
+	}
+	mcpService, err := mcp.NewMCPService(mcpServiceConfig)
 	if err != nil {
 		return fmt.Errorf("failed to create MCP service: %v", err)
 	}
