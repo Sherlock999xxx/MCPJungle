@@ -10,7 +10,7 @@
   </a>
 </p>
 
-MCPJungle is a single source-of-truth registry for all [Model Context Protocol](https://modelcontextprotocol.io/introduction) Servers running in your Organisation.
+MCPJungle is an open source, self-hosted Gateway for all your [Model Context Protocol](https://modelcontextprotocol.io/introduction) Servers.
 
 🧑‍💻 Developers use it to register & manage MCP servers and the tools they provide from a central place.
 
