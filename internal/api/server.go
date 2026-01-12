@@ -27,9 +27,6 @@ const (
 )
 
 type ServerOptions struct {
-	// Port is the HTTP ports to bind the server to
-	Port string
-
 	// MCPProxyServer is the MCP proxy server instance that contains tools for all MCP servers
 	// using the stdio or streamable http transport.
 	MCPProxyServer *server.MCPServer
@@ -52,7 +49,6 @@ type ServerOptions struct {
 
 // Server represents the MCPJungle registry server that handles MCP proxy and API requests
 type Server struct {
-	port   string
 	router *gin.Engine
 
 	mcpProxyServer    *server.MCPServer
@@ -77,7 +73,6 @@ type Server struct {
 // NewServer initializes a new Gin server for MCPJungle registry and MCP proxy
 func NewServer(opts *ServerOptions) (*Server, error) {
 	s := &Server{
-		port:              opts.Port,
 		mcpProxyServer:    opts.MCPProxyServer,
 		sseMcpProxyServer: opts.SseMcpProxyServer,
 		mcpService:        opts.MCPService,
@@ -134,12 +129,10 @@ func (s *Server) InitDev() error {
 	return nil
 }
 
-// Start runs the Gin server (blocking call)
-func (s *Server) Start() error {
-	if err := s.router.Run(":" + s.port); err != nil {
-		return fmt.Errorf("failed to run the server: %w", err)
-	}
-	return nil
+// Router returns the underlying HTTP handler for use with a custom HTTP server.
+// This is useful for graceful shutdown support.
+func (s *Server) Router() http.Handler {
+	return s.router
 }
 
 // setupRouter sets up the Gin router with the MCP proxy server and API endpoints.

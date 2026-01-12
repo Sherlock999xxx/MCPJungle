@@ -341,7 +341,7 @@ func newMcpServerSession(ctx context.Context, s *model.McpServer, initReqTimeout
 	// A new sub-process is spun up for each call to a STDIO mcp server.
 	// This is especially a problem for the MCP proxy server, which is expected to call tools frequently.
 	// This causes a serious performance hit, but is easy to implement so it is used for now.
-	// TODO: Think of a better solution, ie, re-use connections to stdio MCP servers.
+	// For stateful sessions, use the SessionManager to keep the process running.
 	mcpClient, err := runStdioServer(ctx, s, initReqTimeoutSec)
 	if err != nil {
 		return nil, fmt.Errorf("failed to run stdio MCP server %s: %w", s.Name, err)

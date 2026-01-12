@@ -1,12 +1,18 @@
 package cmd
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"log"
+	"net/http"
 	"net/url"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
+	"syscall"
+	"time"
 
 	"github.com/joho/godotenv"
 	"github.com/mark3labs/mcp-go/server"
@@ -45,9 +51,14 @@ const (
 	// the MCP server initialization request timeout.
 	McpServerInitReqTimeoutSecEnvVar = "MCP_SERVER_INIT_REQ_TIMEOUT_SEC"
 
-	// McpServerInitRequestTimeoutSecondsDefault is the default timeout in seconds for MCP server
-	// initialization requests.
+	// McpServerInitRequestTimeoutSecondsDefault is the default timeout in seconds for MCP server initialization requests.
 	McpServerInitRequestTimeoutSecondsDefault = 10
+
+	// SessionIdleTimeoutSecEnvVar is the environment variable for configuring the idle timeout for stateful sessions.
+	SessionIdleTimeoutSecEnvVar = "SESSION_IDLE_TIMEOUT_SEC"
+
+	// SessionIdleTimeoutSecondsDefault is the default idle timeout in seconds for stateful sessions.
+	SessionIdleTimeoutSecondsDefault = -1
 )
 
 var (
@@ -69,7 +80,10 @@ var startServerCmd = &cobra.Command{
 		"POSTGRES_HOST, POSTGRES_PORT (default 5432), POSTGRES_USER (default postgres), POSTGRES_PASSWORD, POSTGRES_DB (default postgres)\n\n" +
 		"You can also configure the amount of time (in seconds) mcpjungle will wait for a new MCP server's initialization before aborting it.\n" +
 		"Set the MCP_SERVER_INIT_REQ_TIMEOUT_SEC environment variable to an integer (default is 10).\n" +
-		"This is useful when you register a MCP server (usually stdio, like filesystem) that may take some time to start up.\n",
+		"This is useful when you register a MCP server (usually stdio, like filesystem) that may take some time to start up.\n\n" +
+		"Finally, you can also configure the idle timeout (in seconds) for stateful sessions.\n" +
+		"Set the SESSION_IDLE_TIMEOUT_SEC environment variable to an integer (default is -1, meaning no timeout).\n" +
+		"This is useful to automatically clean up idle sessions after a certain period of inactivity.",
 	RunE: runStartServer,
 	Annotations: map[string]string{
 		"group": string(subCommandGroupBasic),
@@ -272,6 +286,22 @@ func getMcpServerInitReqTimeout() (int, error) {
 	return timeout, nil
 }
 
+// getSessionIdleTimeout returns the idle timeout (in seconds) for stateful sessions.
+func getSessionIdleTimeout() (int, error) {
+	timeoutStr := strings.TrimSpace(os.Getenv(SessionIdleTimeoutSecEnvVar))
+	if timeoutStr == "" {
+		return SessionIdleTimeoutSecondsDefault, nil
+	}
+	timeout, err := strconv.Atoi(timeoutStr)
+	if err != nil || timeout < 0 {
+		return 0, fmt.Errorf(
+			"invalid value for %s: '%s', must be a non-negative integer (0 = no timeout)",
+			SessionIdleTimeoutSecEnvVar, timeoutStr,
+		)
+	}
+	return timeout, nil
+}
+
 func runStartServer(cmd *cobra.Command, args []string) error {
 	_ = godotenv.Load()
 
@@ -362,12 +392,29 @@ func runStartServer(cmd *cobra.Command, args []string) error {
 	}
 	log.Printf("[server] timeout for initialization requests to MCP servers is %d seconds\n", timeout)
 
+	sessionIdleTimeout, err := getSessionIdleTimeout()
+	if err != nil {
+		return err
+	}
+	if sessionIdleTimeout > 0 {
+		log.Printf("[server] idle timeout for stateful sessions is %d seconds\n", sessionIdleTimeout)
+	} else if sessionIdleTimeout == 0 {
+		log.Printf("[server] stateful sessions will not timeout (run until server shutdown)\n")
+	}
+
+	// Create the session manager for stateful MCP connections
+	sessionManager := mcp.NewSessionManager(&mcp.SessionManagerConfig{
+		IdleTimeoutSec:    sessionIdleTimeout,
+		InitReqTimeoutSec: timeout,
+	})
+
 	mcpServiceConfig := &mcp.ServiceConfig{
 		DB:                      dbConn,
 		McpProxyServer:          mcpProxyServer,
 		SseMcpProxyServer:       sseMcpProxyServer,
 		Metrics:                 mcpMetrics,
 		McpServerInitReqTimeout: timeout,
+		SessionManager:          sessionManager,
 	}
 	mcpService, err := mcp.NewMCPService(mcpServiceConfig)
 	if err != nil {
@@ -386,7 +433,6 @@ func runStartServer(cmd *cobra.Command, args []string) error {
 
 	// create the API server
 	opts := &api.ServerOptions{
-		Port:              bindPort,
 		MCPProxyServer:    mcpProxyServer,
 		SseMcpProxyServer: sseMcpProxyServer,
 		MCPService:        mcpService,
@@ -440,9 +486,39 @@ func runStartServer(cmd *cobra.Command, args []string) error {
 	// Display startup banner when the server is started
 	cmd.Print(asciiArt)
 	cmd.Printf("MCPJungle HTTP server listening on :%s\n\n", bindPort)
-	if err := s.Start(); err != nil {
-		return fmt.Errorf("failed to run the server: %v", err)
+
+	// Create HTTP server for graceful shutdown support
+	httpServer := &http.Server{
+		Addr:    ":" + bindPort,
+		Handler: s.Router(),
 	}
 
+	// Channel to receive OS signals
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+
+	// Start the server in a goroutine
+	go func() {
+		if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Fatalf("failed to run the server: %v", err)
+		}
+	}()
+
+	// Block until we receive a shutdown signal
+	sig := <-quit
+	log.Printf("[server] Received signal %v, initiating graceful shutdown...\n", sig)
+
+	// Gracefully shutdown the MCP service (closes all stateful sessions)
+	mcpService.Shutdown()
+
+	// Gracefully shutdown the HTTP server with a timeout
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	if err := httpServer.Shutdown(shutdownCtx); err != nil {
+		return fmt.Errorf("server forced to shutdown: %v", err)
+	}
+
+	log.Println("[server] Server gracefully stopped")
 	return nil
 }

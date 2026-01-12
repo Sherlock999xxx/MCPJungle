@@ -21,6 +21,10 @@ type ServiceConfig struct {
 	Metrics telemetry.CustomMetrics
 
 	McpServerInitReqTimeout int
+
+	// SessionManager manages persistent connections for MCP servers configured in stateful mode.
+	// If nil, a default SessionManager will be created.
+	SessionManager *SessionManager
 }
 
 // MCPService coordinates operations amongst the registry database, mcp proxy server and upstream MCP servers.
@@ -45,11 +49,23 @@ type MCPService struct {
 	metrics telemetry.CustomMetrics
 
 	mcpServerInitReqTimeoutSec int
+
+	// sessionManager manages persistent connections for MCP servers configured in stateful mode.
+	sessionManager *SessionManager
 }
 
 // NewMCPService creates a new instance of MCPService.
 // It initializes the MCP proxy server by loading all registered tools from the database.
 func NewMCPService(c *ServiceConfig) (*MCPService, error) {
+	// Use the provided session manager, or create a default one if not provided
+	sessionManager := c.SessionManager
+	if sessionManager == nil {
+		sessionManager = NewSessionManager(&SessionManagerConfig{
+			IdleTimeoutSec:    DefaultSessionIdleTimeoutSec,
+			InitReqTimeoutSec: c.McpServerInitReqTimeout,
+		})
+	}
+
 	s := &MCPService{
 		db: c.DB,
 
@@ -66,9 +82,18 @@ func NewMCPService(c *ServiceConfig) (*MCPService, error) {
 		metrics: c.Metrics,
 
 		mcpServerInitReqTimeoutSec: c.McpServerInitReqTimeout,
+
+		sessionManager: sessionManager,
 	}
 	if err := s.initMCPProxyServer(); err != nil {
 		return nil, fmt.Errorf("failed to initialize MCP proxy server: %w", err)
 	}
 	return s, nil
+}
+
+// Shutdown gracefully shuts down the MCP service, closing all stateful sessions.
+func (m *MCPService) Shutdown() {
+	if m.sessionManager != nil {
+		m.sessionManager.Shutdown()
+	}
 }
