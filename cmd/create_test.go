@@ -51,6 +51,10 @@ func TestCreateMcpClientSubcommand(t *testing.T) {
 	accessTokenFlag := createMcpClientCmd.Flags().Lookup("access-token")
 	testhelpers.AssertNotNil(t, accessTokenFlag)
 	testhelpers.AssertTrue(t, len(accessTokenFlag.Usage) > 0, "Access token flag should have usage description")
+
+	configFlag := createMcpClientCmd.Flags().Lookup("config")
+	testhelpers.AssertNotNil(t, configFlag)
+	testhelpers.AssertTrue(t, len(configFlag.Usage) > 0, "Config flag should have usage description")
 }
 
 func TestCreateUserSubcommand(t *testing.T) {
@@ -63,6 +67,11 @@ func TestCreateUserSubcommand(t *testing.T) {
 	// Test command functions
 	testhelpers.AssertNotNil(t, createUserCmd.RunE)
 	testhelpers.AssertNotNil(t, createUserCmd.Args)
+
+	// Test command flags
+	configFlag := createUserCmd.Flags().Lookup("config")
+	testhelpers.AssertNotNil(t, configFlag)
+	testhelpers.AssertTrue(t, len(configFlag.Usage) > 0, "Config flag should have usage description")
 }
 
 func TestCreateToolGroupSubcommand(t *testing.T) {
@@ -85,6 +94,8 @@ func TestCreateCommandVariables(t *testing.T) {
 	// Test that command variables are properly initialized to empty values
 	testhelpers.AssertEqual(t, "", createMcpClientCmdAllowedServers)
 	testhelpers.AssertEqual(t, "", createMcpClientCmdDescription)
+	testhelpers.AssertEqual(t, "", createMcpClientCmdConfigFilePath)
+	testhelpers.AssertEqual(t, "", createUserCmdConfigFilePath)
 	testhelpers.AssertEqual(t, "", createToolGroupConfigFilePath)
 }
 

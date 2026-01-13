@@ -20,13 +20,19 @@ var createCmd = &cobra.Command{
 }
 
 var createMcpClientCmd = &cobra.Command{
-	Use:   "mcp-client [name]",
-	Args:  cobra.ExactArgs(1),
+	Use: "mcp-client [name]",
+	Args: func(cmd *cobra.Command, args []string) error {
+		if createMcpClientCmdConfigFilePath != "" {
+			return cobra.ExactArgs(0)(cmd, args)
+		}
+		return cobra.ExactArgs(1)(cmd, args)
+	},
 	Short: "Create an authenticated MCP client (Enterprise mode)",
 	Long: "Create an MCP client that can make authenticated requests to the MCPJungle MCP Proxy.\n" +
 		"This returns an access token which should be sent by your client in the " +
 		"`Authorization: Bearer {token}` http header.\n" +
 		"You can also send a custom access token by using the --access-token flag.\n" +
+		"Alternatively, you can supply a JSON config file using the --config flag.\n" +
 		"Use the --allow option to control which MCP servers the client can access:\n" +
 		"    --allow \"server1, server2, server3\" | --allow \"*\"\n" +
 		"This command is only available in Enterprise mode.",
@@ -34,8 +40,13 @@ var createMcpClientCmd = &cobra.Command{
 }
 
 var createUserCmd = &cobra.Command{
-	Use:   "user [username]",
-	Args:  cobra.ExactArgs(1),
+	Use: "user [username]",
+	Args: func(cmd *cobra.Command, args []string) error {
+		if createUserCmdConfigFilePath != "" {
+			return cobra.ExactArgs(0)(cmd, args)
+		}
+		return cobra.ExactArgs(1)(cmd, args)
+	},
 	Short: "Create a new user (Enterprise mode)",
 	Long: "Create a new standard user in MCPJungle.\n" +
 		"A user can make authenticated requests to the MCPJungle API server and perform limited actions like:\n" +
@@ -63,8 +74,10 @@ var (
 	createMcpClientCmdAllowedServers string
 	createMcpClientCmdDescription    string
 	createMcpClientCmdAccessToken    string
+	createMcpClientCmdConfigFilePath string
 
-	createUserCmdAccessToken string
+	createUserCmdAccessToken    string
+	createUserCmdConfigFilePath string
 
 	createToolGroupConfigFilePath string
 )
@@ -89,12 +102,28 @@ func init() {
 		"",
 		"Custom access token for the MCP client. If not provided, a random token will be generated.",
 	)
+	createMcpClientCmd.Flags().StringVar(
+		&createMcpClientCmdConfigFilePath,
+		"config",
+		"",
+		"Path to a JSON configuration file for the MCP client.\n"+
+			"If provided, the client will be created using the configuration in the file.\n"+
+			"All other flags will be ignored.",
+	)
 
 	createUserCmd.Flags().StringVar(
 		&createUserCmdAccessToken,
 		"access-token",
 		"",
 		"Custom access token for the user. If not provided, a random token will be generated.",
+	)
+	createUserCmd.Flags().StringVar(
+		&createUserCmdConfigFilePath,
+		"config",
+		"",
+		"Path to a JSON configuration file for the user.\n"+
+			"If provided, the user will be created using the configuration in the file.\n"+
+			"All other flags will be ignored.",
 	)
 
 	createToolGroupCmd.Flags().StringVarP(
@@ -114,48 +143,62 @@ func init() {
 }
 
 func runCreateMcpClient(cmd *cobra.Command, args []string) error {
-	// convert the comma-separated list of allowed servers into a slice
-	allowList := make([]string, 0)
-	for _, s := range strings.Split(createMcpClientCmdAllowedServers, ",") {
-		trimmed := strings.TrimSpace(s)
-		if trimmed != "" {
-			allowList = append(allowList, trimmed)
+	client := &types.McpClient{}
+	if createMcpClientCmdConfigFilePath == "" {
+		allowList := parseAllowList(createMcpClientCmdAllowedServers, cmd)
+		client = &types.McpClient{
+			Name:        args[0],
+			Description: createMcpClientCmdDescription,
+			AllowList:   allowList,
 		}
-		if trimmed == types.AllowAllMcpServers {
-			cmd.Println("NOTE: This client will have access to all MCP Servers because a wildcard is used.")
-			cmd.Println("This practice is highly discouraged!")
-			cmd.Println()
+		if createMcpClientCmdAccessToken != "" {
+			client.AccessToken = createMcpClientCmdAccessToken
+			client.IsCustomAccessToken = true
 		}
+	} else {
+		config, err := readMcpClientConfig(createMcpClientCmdConfigFilePath)
+		if err != nil {
+			return err
+		}
+		if config.Name == "" {
+			return fmt.Errorf("config file must define a client name")
+		}
+		allowList := config.AllowList
+		client = &types.McpClient{
+			Name:        config.Name,
+			Description: config.Description,
+			AllowList:   allowList,
+		}
+		accessToken, err := resolveAccessTokenFromConfig(config.AccessToken, config.AccessTokenEnv, config.AccessTokenRef)
+		if err != nil {
+			return err
+		}
+		if accessToken == "" {
+			return fmt.Errorf("config file must supply a custom access token")
+		}
+		client.AccessToken = accessToken
+		client.IsCustomAccessToken = true
+		warnAllowAll(cmd, allowList)
 	}
 
-	c := &types.McpClient{
-		Name:        args[0],
-		Description: createMcpClientCmdDescription,
-		AllowList:   allowList,
-	}
-	if createMcpClientCmdAccessToken != "" {
-		c.AccessToken = createMcpClientCmdAccessToken
-		c.IsCustomAccessToken = true
-	}
-
-	token, err := apiClient.CreateMcpClient(c)
+	token, err := apiClient.CreateMcpClient(client)
 	if err != nil {
 		return fmt.Errorf("failed to create MCP client: %w", err)
 	}
-	if !c.IsCustomAccessToken && token == "" {
+	if !client.IsCustomAccessToken && token == "" {
 		// user didn't supply a custom token and server didn't generate a valid one
 		return fmt.Errorf("server returned an empty token, this was unexpected")
 	}
 
-	cmd.Printf("MCP client '%s' created successfully!\n", c.Name)
+	cmd.Printf("MCP client '%s' created successfully!\n", client.Name)
 
-	if len(c.AllowList) > 0 {
-		cmd.Println("Servers accessible: " + strings.Join(c.AllowList, ","))
+	if len(client.AllowList) > 0 {
+		cmd.Println("Servers accessible: " + strings.Join(client.AllowList, ","))
 	} else {
 		cmd.Println("This client does not have access to any MCP servers.")
 	}
 
-	if !c.IsCustomAccessToken {
+	if !client.IsCustomAccessToken {
 		// server generated the access token, display it to the user
 		cmd.Printf("\nAccess token: %s\n", token)
 	}
@@ -165,11 +208,33 @@ func runCreateMcpClient(cmd *cobra.Command, args []string) error {
 }
 
 func runCreateUser(cmd *cobra.Command, args []string) error {
-	u := &types.CreateOrUpdateUserRequest{
-		Username:    args[0],
-		AccessToken: createUserCmdAccessToken,
+	user := &types.CreateOrUpdateUserRequest{}
+	if createUserCmdConfigFilePath == "" {
+		user = &types.CreateOrUpdateUserRequest{
+			Username:    args[0],
+			AccessToken: createUserCmdAccessToken,
+		}
+	} else {
+		config, err := readUserConfig(createUserCmdConfigFilePath)
+		if err != nil {
+			return err
+		}
+		if config.Username == "" {
+			return fmt.Errorf("config file must define a username")
+		}
+		accessToken, err := resolveAccessTokenFromConfig(config.AccessToken, config.AccessTokenEnv, config.AccessTokenRef)
+		if err != nil {
+			return err
+		}
+		if accessToken == "" {
+			return fmt.Errorf("config file must supply a custom access token")
+		}
+		user = &types.CreateOrUpdateUserRequest{
+			Username:    config.Username,
+			AccessToken: accessToken,
+		}
 	}
-	resp, err := apiClient.CreateUser(u)
+	resp, err := apiClient.CreateUser(user)
 	if err != nil {
 		return err
 	}
@@ -177,7 +242,7 @@ func runCreateUser(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("server returned an empty access token, this was unexpected")
 	}
 
-	cmd.Printf("User '%s' created successfully\n", u.Username)
+	cmd.Printf("User '%s' created successfully\n", user.Username)
 	cmd.Println("The user should now run the following command to log into mcpjungle:")
 	cmd.Println()
 	cmd.Printf("    mcpjungle login %s\n", resp.AccessToken)
@@ -198,6 +263,102 @@ func readToolGroupConfig(filePath string) (*types.ToolGroup, error) {
 	}
 
 	return &input, nil
+}
+
+func readMcpClientConfig(filePath string) (*types.McpClientConfig, error) {
+	var input types.McpClientConfig
+
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		return &input, fmt.Errorf("failed to read config file %s: %w", filePath, err)
+	}
+	if err := json.Unmarshal(data, &input); err != nil {
+		return &input, fmt.Errorf("failed to parse config file: %w", err)
+	}
+
+	return &input, nil
+}
+
+func readUserConfig(filePath string) (*types.UserConfig, error) {
+	var input types.UserConfig
+
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		return &input, fmt.Errorf("failed to read config file %s: %w", filePath, err)
+	}
+	if err := json.Unmarshal(data, &input); err != nil {
+		return &input, fmt.Errorf("failed to parse config file: %w", err)
+	}
+
+	return &input, nil
+}
+
+func parseAllowList(input string, cmd *cobra.Command) []string {
+	allowList := make([]string, 0)
+	for _, s := range strings.Split(input, ",") {
+		trimmed := strings.TrimSpace(s)
+		if trimmed != "" {
+			allowList = append(allowList, trimmed)
+		}
+		if trimmed == types.AllowAllMcpServers {
+			cmd.Println("NOTE: This client will have access to all MCP Servers because a wildcard is used.")
+			cmd.Println("This practice is highly discouraged!")
+			cmd.Println()
+		}
+	}
+
+	return allowList
+}
+
+func resolveAccessTokenFromConfig(accessToken string, accessTokenEnv string, accessTokenRef types.AccessTokenRef) (string, error) {
+	if accessToken != "" {
+		return accessToken, nil
+	}
+
+	envKey := accessTokenEnv
+	if envKey != "" && accessTokenRef.Env != "" && envKey != accessTokenRef.Env {
+		return "", fmt.Errorf("config file defines conflicting access token env vars")
+	}
+	if envKey == "" {
+		envKey = accessTokenRef.Env
+	}
+	if envKey != "" {
+		value, ok := os.LookupEnv(envKey)
+		if ok {
+			trimmed := strings.TrimSpace(value)
+			if trimmed != "" {
+				return trimmed, nil
+			}
+		}
+		if accessTokenRef.File == "" {
+			return "", fmt.Errorf("environment variable %s is not set or empty", envKey)
+		}
+	}
+
+	if accessTokenRef.File != "" {
+		data, err := os.ReadFile(accessTokenRef.File)
+		if err != nil {
+			return "", fmt.Errorf("failed to read access token file %s: %w", accessTokenRef.File, err)
+		}
+		trimmed := strings.TrimSpace(string(data))
+		if trimmed == "" {
+			return "", fmt.Errorf("access token file %s is empty", accessTokenRef.File)
+		}
+		return trimmed, nil
+	}
+
+	return "", nil
+}
+
+func warnAllowAll(cmd *cobra.Command, allowList []string) {
+	for _, entry := range allowList {
+		if entry == types.AllowAllMcpServers {
+			cmd.Println("NOTE: This client will have access to all MCP Servers because a wildcard is used.")
+			cmd.Println("This practice is highly discouraged!")
+			cmd.Println()
+			return
+		}
+	}
 }
 
 func runCreateToolGroup(cmd *cobra.Command, args []string) error {

@@ -14,6 +14,22 @@ type McpClient struct {
 	AllowList []string `json:"allow_list"`
 }
 
+// AccessTokenRef describes how to load a secret access token from an external source.
+type AccessTokenRef struct {
+	Env  string `json:"env"`
+	File string `json:"file"`
+}
+
+// McpClientConfig describes the JSON configuration for creating an MCP client.
+type McpClientConfig struct {
+	Name           string         `json:"name"`
+	Description    string         `json:"description"`
+	AllowList      []string       `json:"allow_list"`
+	AccessToken    string         `json:"access_token"`
+	AccessTokenEnv string         `json:"access_token.env"`
+	AccessTokenRef AccessTokenRef `json:"access_token_ref"`
+}
+
 // AllowAllMcpServers is a wildcard operator used to indicate that a mcp client has access to all mcp servers
 // in mcpjungle.
 const AllowAllMcpServers = "*"

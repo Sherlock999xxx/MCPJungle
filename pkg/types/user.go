@@ -26,3 +26,11 @@ type CreateOrUpdateUserResponse struct {
 	Role        string `json:"role"`
 	AccessToken string `json:"access_token"`
 }
+
+// UserConfig describes the JSON configuration for creating a user.
+type UserConfig struct {
+	Username       string         `json:"username"`
+	AccessToken    string         `json:"access_token"`
+	AccessTokenEnv string         `json:"access_token.env"`
+	AccessTokenRef AccessTokenRef `json:"access_token_ref"`
+}
