@@ -34,7 +34,7 @@ func TestCreateMcpClientSubcommand(t *testing.T) {
 	t.Parallel()
 
 	// Test command properties
-	testhelpers.AssertEqual(t, "mcp-client [name]", createMcpClientCmd.Use)
+	testhelpers.AssertEqual(t, "mcp-client [name] | --conf <file>", createMcpClientCmd.Use)
 	testhelpers.AssertEqual(t, "Create an authenticated MCP client (Enterprise mode)", createMcpClientCmd.Short)
 	testhelpers.AssertNotNil(t, createMcpClientCmd.Long)
 	testhelpers.AssertTrue(t, len(createMcpClientCmd.Long) > 0, "Long description should not be empty")
@@ -56,14 +56,14 @@ func TestCreateMcpClientSubcommand(t *testing.T) {
 	testhelpers.AssertNotNil(t, accessTokenFlag)
 	testhelpers.AssertTrue(t, len(accessTokenFlag.Usage) > 0, "Access token flag should have usage description")
 
-	configFlag := createMcpClientCmd.Flags().Lookup("config")
+	configFlag := createMcpClientCmd.Flags().Lookup("conf")
 	testhelpers.AssertNotNil(t, configFlag)
 	testhelpers.AssertTrue(t, len(configFlag.Usage) > 0, "Config flag should have usage description")
 }
 
 func TestCreateUserSubcommand(t *testing.T) {
 	// Test command properties
-	testhelpers.AssertEqual(t, "user [username]", createUserCmd.Use)
+	testhelpers.AssertEqual(t, "user [username] | --conf <file>", createUserCmd.Use)
 	testhelpers.AssertEqual(t, "Create a new user (Enterprise mode)", createUserCmd.Short)
 	testhelpers.AssertNotNil(t, createUserCmd.Long)
 	testhelpers.AssertTrue(t, len(createUserCmd.Long) > 0, "Long description should not be empty")
@@ -73,14 +73,14 @@ func TestCreateUserSubcommand(t *testing.T) {
 	testhelpers.AssertNotNil(t, createUserCmd.Args)
 
 	// Test command flags
-	configFlag := createUserCmd.Flags().Lookup("config")
+	configFlag := createUserCmd.Flags().Lookup("conf")
 	testhelpers.AssertNotNil(t, configFlag)
 	testhelpers.AssertTrue(t, len(configFlag.Usage) > 0, "Config flag should have usage description")
 }
 
 func TestCreateToolGroupSubcommand(t *testing.T) {
 	// Test command properties
-	testhelpers.AssertEqual(t, "group", createToolGroupCmd.Use)
+	testhelpers.AssertEqual(t, "group --conf <file>", createToolGroupCmd.Use)
 	testhelpers.AssertEqual(t, "Create a Group of MCP Tools", createToolGroupCmd.Short)
 	testhelpers.AssertNotNil(t, createToolGroupCmd.Long)
 	testhelpers.AssertTrue(t, len(createToolGroupCmd.Long) > 0, "Long description should not be empty")
@@ -244,7 +244,7 @@ func TestResolveAccessTokenFromConfig(t *testing.T) {
 		t.Parallel()
 		f, err := os.CreateTemp("", "mcpj-token-*")
 		testhelpers.AssertNoError(t, err)
-		_ = os.WriteFile(f.Name(), []byte("  file-token\n"), 0600)
+		_ = os.WriteFile(f.Name(), []byte("  file-token\n"), 0o600)
 		defer os.Remove(f.Name())
 
 		token, err := resolveAccessTokenFromConfig("", types.AccessTokenRef{File: f.Name()})
@@ -260,7 +260,7 @@ func TestResolveAccessTokenFromConfig(t *testing.T) {
 
 		f, err := os.CreateTemp("", "mcpj-token-*")
 		testhelpers.AssertNoError(t, err)
-		_ = os.WriteFile(f.Name(), []byte("from-file"), 0600)
+		_ = os.WriteFile(f.Name(), []byte("from-file"), 0o600)
 		defer os.Remove(f.Name())
 
 		token, err := resolveAccessTokenFromConfig("", types.AccessTokenRef{Env: env, File: f.Name()})

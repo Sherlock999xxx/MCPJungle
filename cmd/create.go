@@ -20,7 +20,7 @@ var createCmd = &cobra.Command{
 }
 
 var createMcpClientCmd = &cobra.Command{
-	Use: "mcp-client [name]",
+	Use: "mcp-client [name] | --conf <file>",
 	Args: func(cmd *cobra.Command, args []string) error {
 		// if a config file is provided, no positional args are expected
 		if createMcpClientCmdConfigFilePath != "" {
@@ -35,13 +35,13 @@ var createMcpClientCmd = &cobra.Command{
 		"You can also set a custom access token by using the --access-token flag.\n" +
 		"Use the --allow option to control which MCP servers the client can access:\n" +
 		"    --allow \"server1, server2, server3\" | --allow \"*\"\n" +
-		"Alternatively, you can supply a JSON config file using the --config flag.\n" +
+		"It is mandatory to either specify the name or a config file.\n" +
 		"This command is only available in Enterprise mode.",
 	RunE: runCreateMcpClient,
 }
 
 var createUserCmd = &cobra.Command{
-	Use: "user [username]",
+	Use: "user [username] | --conf <file>",
 	Args: func(cmd *cobra.Command, args []string) error {
 		// if a config file is provided, no positional args are expected
 		if createUserCmdConfigFilePath != "" {
@@ -54,16 +54,14 @@ var createUserCmd = &cobra.Command{
 		"A user can make authenticated requests to the MCPJungle API server and perform limited actions like:\n" +
 		"- List and view MCP servers & tools\n" +
 		"- Check tool usage and invoke them\n\n" +
-		"This returns an access token which should be sent by your user in the " +
-		"`Authorization: Bearer {token}` http header.\n" +
-		"You can also set a custom access token by using the --access-token flag.\n" +
-		"Alternatively, you can supply a JSON config file using the --config flag.\n" +
+		"This operation generates a unique access token for the user to use when making requests.\n" +
+		"It is mandatory to either specify the username or a config file.\n" +
 		"This command is only available in Enterprise mode.",
 	RunE: runCreateUser,
 }
 
 var createToolGroupCmd = &cobra.Command{
-	Use:   "group",
+	Use:   "group --conf <file>",
 	Short: "Create a Group of MCP Tools",
 	Long: "Create a new Group of MCP Tools by supplying a configuration file.\n" +
 		"A group lets you expose only a handful of Tools that you choose.\n" +
@@ -109,9 +107,10 @@ func init() {
 		"",
 		"Custom access token for the MCP client. If not provided, a random token will be generated.",
 	)
-	createMcpClientCmd.Flags().StringVar(
+	createMcpClientCmd.Flags().StringVarP(
 		&createMcpClientCmdConfigFilePath,
-		"config",
+		"conf",
+		"c",
 		"",
 		"Path to a JSON configuration file for the MCP client.\n"+
 			"If provided, the client will be created using the configuration in the file.\n"+
@@ -124,9 +123,10 @@ func init() {
 		"",
 		"Custom access token for the user. If not provided, a random token will be generated.",
 	)
-	createUserCmd.Flags().StringVar(
+	createUserCmd.Flags().StringVarP(
 		&createUserCmdConfigFilePath,
-		"config",
+		"conf",
+		"c",
 		"",
 		"Path to a JSON configuration file for the user.\n"+
 			"If provided, the user will be created using the configuration in the file.\n"+
@@ -179,7 +179,7 @@ func runCreateMcpClient(cmd *cobra.Command, args []string) error {
 		client = &types.McpClient{
 			Name:        config.Name,
 			Description: config.Description,
-			AllowList:   config.AllowList,
+			AllowList:   config.AllowMcpServers,
 		}
 		accessToken, err := resolveAccessTokenFromConfig(config.AccessToken, config.AccessTokenRef)
 		if err != nil {
@@ -192,7 +192,7 @@ func runCreateMcpClient(cmd *cobra.Command, args []string) error {
 		client.IsCustomAccessToken = true
 
 		// if a wildcard is used in the allow list, warn the user
-		for _, entry := range config.AllowList {
+		for _, entry := range config.AllowMcpServers {
 			if entry == types.AllowAllMcpServers {
 				warnAllowAll(cmd)
 				break
@@ -270,6 +270,28 @@ func runCreateUser(cmd *cobra.Command, args []string) error {
 	cmd.Println()
 	cmd.Printf("    mcpjungle login %s\n", resp.AccessToken)
 	cmd.Println()
+
+	return nil
+}
+
+func runCreateToolGroup(cmd *cobra.Command, args []string) error {
+	group, err := readToolGroupConfig(createToolGroupConfigFilePath)
+	if err != nil {
+		return fmt.Errorf("failed to read config file %s: %w", createToolGroupConfigFilePath, err)
+	}
+
+	resp, err := apiClient.CreateToolGroup(group)
+	if err != nil {
+		return fmt.Errorf("failed to create tool group: %w", err)
+	}
+
+	cmd.Printf("Tool Group %s created successfully\n", group.Name)
+	cmd.Print("It is now accessible at the following streamable http endpoint:\n\n")
+	cmd.Println("    " + resp.StreamableHTTPEndpoint + "\n")
+
+	cmd.Print("Tools using the SSE (server-sent events) transport are accessible at:\n\n")
+	cmd.Println("    " + resp.SSEEndpoint)
+	cmd.Println("    " + resp.SSEMessageEndpoint + "\n")
 
 	return nil
 }
@@ -378,26 +400,4 @@ func warnAllowAll(cmd *cobra.Command) {
 	cmd.Println("NOTE: This client will have access to all MCP Servers because a wildcard is used.")
 	cmd.Println("This practice is highly discouraged!")
 	cmd.Println()
-}
-
-func runCreateToolGroup(cmd *cobra.Command, args []string) error {
-	group, err := readToolGroupConfig(createToolGroupConfigFilePath)
-	if err != nil {
-		return fmt.Errorf("failed to read config file %s: %w", createToolGroupConfigFilePath, err)
-	}
-
-	resp, err := apiClient.CreateToolGroup(group)
-	if err != nil {
-		return fmt.Errorf("failed to create tool group: %w", err)
-	}
-
-	cmd.Printf("Tool Group %s created successfully\n", group.Name)
-	cmd.Print("It is now accessible at the following streamable http endpoint:\n\n")
-	cmd.Println("    " + resp.StreamableHTTPEndpoint + "\n")
-
-	cmd.Print("Tools using the SSE (server-sent events) transport are accessible at:\n\n")
-	cmd.Println("    " + resp.SSEEndpoint)
-	cmd.Println("    " + resp.SSEMessageEndpoint + "\n")
-
-	return nil
 }
