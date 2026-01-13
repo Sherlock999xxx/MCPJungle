@@ -31,6 +31,5 @@ type CreateOrUpdateUserResponse struct {
 type UserConfig struct {
 	Username       string         `json:"username"`
 	AccessToken    string         `json:"access_token"`
-	AccessTokenEnv string         `json:"access_token.env"`
 	AccessTokenRef AccessTokenRef `json:"access_token_ref"`
 }

@@ -26,7 +26,6 @@ type McpClientConfig struct {
 	Description    string         `json:"description"`
 	AllowList      []string       `json:"allow_list"`
 	AccessToken    string         `json:"access_token"`
-	AccessTokenEnv string         `json:"access_token.env"`
 	AccessTokenRef AccessTokenRef `json:"access_token_ref"`
 }
 
