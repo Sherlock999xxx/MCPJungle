@@ -743,6 +743,59 @@ A client that has access to a particular server this way can view and call all t
 > [!NOTE]
 > If you don't specify the `--allow` flag, the MCP client will not be able to access any MCP servers.
 
+#### Creating mcp clients from the config file
+You can also create an MCP client by providing a JSON configuration file:
+```json
+{
+	"name": "foobar",
+	"allowed_servers": ["deepwiki", "time"],
+	"access_token": "my_secret_token_123",
+    "access_token_ref": {
+        "file": "/path/to/token-file.txt",
+        "env": "ENV_VAR_NAME"
+    }
+}
+```
+
+When creating a client from a config file, you **must** provide a custom access token because mcpjungle cannot print the generated token to the console.
+
+#### Supplying custom access tokens in config files
+
+There are 3 ways to provide the access token from configuration file:
+
+1. Directly in the `access_token` field: Only use this for testing purposes. Not recommended for production, especially if you're committing the config file to version control.
+2. From a file using the `access_token_ref.file` field: The file should contain only the token string.
+3. From an environment variable using the `access_token_ref.env` field: The env var should contain the token string.
+
+#### Creating user accounts
+In addition to MCP clients, you can also create User accounts in mcpjungle for human users.
+
+A user has a very limited set of privileges compared to an admin in the enterprise mode.
+For example, they can view and use MCP servers, but they don't have write permissions in mcpjungle.
+
+```bash
+# Auto-generates a secret for user
+mcpjungle create user bob
+# Specify a custom access token for user
+mcpjungle create user alice --access-token alice_token_123
+# Create user from config file
+mcpjungle create user --conf /path/to/user-config.json
+```
+
+The config file format for creating a user is similar to that of an MCP client:
+```json
+{
+    "name": "charlie",
+    "access_token": "charlies_secret_token",
+    "access_token_ref": {
+        "file": "/path/to/token-file.txt",
+        "env": "ENV_VAR_NAME"
+    }
+}
+```
+
+Again, when using the config file, you **must** provide a custom access token.
+
 ### OpenTelemetry
 MCPJungle supports Prometheus-compatible OpenTelemetry Metrics for observability.
 
