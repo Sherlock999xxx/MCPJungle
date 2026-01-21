@@ -3,6 +3,12 @@
 # Use the official uv image as base
 FROM ghcr.io/astral-sh/uv:debian
 
+# OCI image labels
+LABEL org.opencontainers.image.source="https://github.com/mcpjungle/mcpjungle"
+LABEL org.opencontainers.image.description="MCPJungle - Self-hosted MCP Gateway for developers and enterprises"
+LABEL org.opencontainers.image.title="MCPJungle"
+LABEL org.opencontainers.image.vendor="mcpjungle"
+
 # Install Node.js
 RUN apt-get update \
     && apt-get install -y curl gnupg \
