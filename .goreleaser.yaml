@@ -9,6 +9,7 @@ project_name: mcpjungle
 before:
   hooks:
     - go test -v ./...
+    - golangci-lint run
     - go mod tidy
 
 builds:
