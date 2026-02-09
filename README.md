@@ -41,6 +41,7 @@ MCPJungle is an open source, self-hosted Gateway for all your [Model Context Pro
   - [Cold-start problem & Stateful Connections](#cold-start-problem--stateful-connections)
   - [Connect to mcpjungle from Claude](#claude)
   - [Connect to mcpjungle from Cursor](#cursor)
+  - [Connect to mcpjungle from Copilot](#copilot)
   - [Enabling/Disabling Tools globally](#enablingdisabling-tools)
   - [Prompts](#prompts)
   - [Tool Groups](#tool-groups)
@@ -466,6 +467,24 @@ Assuming that MCPJungle is running on `http://localhost:8080`, use the following
 ```
 
 You can watch a quick video on [How to connect Cursor to MCPJungle](https://youtu.be/SaUqj-eLPnw).
+
+### Copilot
+
+Follow Copilot's doc on [configuraing a MCP server manually](https://docs.github.com/en/copilot/how-tos/provide-context/use-mcp/extend-copilot-chat-with-mcp#configuring-mcp-servers-manually-1).
+
+Your mcp.json config file should look like this after adding mcpjungle to it:
+```json
+{
+  "servers": {
+    "mcpjungle": {
+      "url": "http://localhost:8080/mcp"
+    }
+  }
+}
+```
+
+> [!NOTE]
+> You may have to click on `Start` for Copilot to actually start interacting with mcpjungle.
 
 ## Enabling/Disabling Tools
 You can disable and re-enable a specific tool or all the tools provided by an MCP Server.
