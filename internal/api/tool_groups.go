@@ -149,6 +149,28 @@ func (s *Server) getToolGroupHandler() gin.HandlerFunc {
 	}
 }
 
+func (s *Server) getToolGroupEffectiveToolsHandler() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		name := c.Param("name")
+		if name == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "name is required"})
+			return
+		}
+
+		tools, err := s.toolGroupService.ResolveEffectiveTools(name)
+		if err != nil {
+			if errors.Is(err, toolgroup.ErrToolGroupNotFound) {
+				c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("tool group %s not found", name)})
+				return
+			}
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{"tools": tools})
+	}
+}
+
 func (s *Server) deleteToolGroupHandler() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		name := c.Param("name")
