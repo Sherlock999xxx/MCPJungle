@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -22,6 +23,7 @@ import (
 	"github.com/mcpjungle/mcpjungle/internal/migrations"
 	"github.com/mcpjungle/mcpjungle/internal/model"
 	"github.com/mcpjungle/mcpjungle/internal/service/config"
+	"github.com/mcpjungle/mcpjungle/internal/service/configsync"
 	"github.com/mcpjungle/mcpjungle/internal/service/mcp"
 	"github.com/mcpjungle/mcpjungle/internal/service/mcpclient"
 	"github.com/mcpjungle/mcpjungle/internal/service/toolgroup"
@@ -31,12 +33,15 @@ import (
 )
 
 const (
-	BindPortEnvVar  = "PORT"
-	BindPortDefault = "8080"
+	BindPortEnvVar           = "PORT"
+	BindPortDefault          = "8080"
+	DefaultConfigSyncDirName = ".mcpjungle"
 
-	DBUrlEnvVar            = "DATABASE_URL"
-	ServerModeEnvVar       = "SERVER_MODE"
-	TelemetryEnabledEnvVar = "OTEL_ENABLED"
+	DBUrlEnvVar             = "DATABASE_URL"
+	ServerModeEnvVar        = "SERVER_MODE"
+	TelemetryEnabledEnvVar  = "OTEL_ENABLED"
+	ConfigSyncEnabledEnvVar = "MCPJUNGLE_CONFIG_SYNC_ENABLED"
+	ConfigSyncDirEnvVar     = "MCPJUNGLE_CONFIG_DIR"
 )
 
 const (
@@ -66,6 +71,8 @@ var (
 	startServerCmdBindPort          string
 	startServerCmdEnterpriseEnabled bool
 	startServerCmdProdEnabled       bool
+	startServerCmdConfigSyncEnabled bool
+	startServerCmdConfigDir         string
 )
 
 var startServerCmd = &cobra.Command{
@@ -114,6 +121,18 @@ func init() {
 		"prod",
 		false,
 		"[DEPRECATED] Alias for --enterprise flag.",
+	)
+	startServerCmd.Flags().BoolVar(
+		&startServerCmdConfigSyncEnabled,
+		"config-sync",
+		false,
+		fmt.Sprintf("Enable live sync of entity configs from a directory (or env var %s)", ConfigSyncEnabledEnvVar),
+	)
+	startServerCmd.Flags().StringVar(
+		&startServerCmdConfigDir,
+		"config-dir",
+		"",
+		fmt.Sprintf("Directory containing config files for sync (or env var %s, default ~/.mcpjungle)", ConfigSyncDirEnvVar),
 	)
 
 	rootCmd.AddCommand(startServerCmd)
@@ -303,6 +322,29 @@ func getSessionIdleTimeout() (int, error) {
 	return timeout, nil
 }
 
+func getConfigSyncEnabled() bool {
+	if startServerCmdConfigSyncEnabled {
+		return true
+	}
+	v := strings.TrimSpace(strings.ToLower(os.Getenv(ConfigSyncEnabledEnvVar)))
+	return v == "1" || v == "true"
+}
+
+func getConfigSyncDir() string {
+	if strings.TrimSpace(startServerCmdConfigDir) != "" {
+		return strings.TrimSpace(startServerCmdConfigDir)
+	}
+	v := strings.TrimSpace(os.Getenv(ConfigSyncDirEnvVar))
+	if v != "" {
+		return v
+	}
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return filepath.Join("~", DefaultConfigSyncDirName)
+	}
+	return filepath.Join(homeDir, DefaultConfigSyncDirName)
+}
+
 func runStartServer(cmd *cobra.Command, args []string) error {
 	_ = godotenv.Load()
 
@@ -431,6 +473,22 @@ func runStartServer(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("failed to create Tool Group service: %v", err)
 	}
+
+	configSyncService, err := configsync.New(configsync.Options{
+		Enabled: getConfigSyncEnabled(),
+		Dir:     getConfigSyncDir(),
+	}, configsync.Services{
+		DB:               dbConn,
+		MCPService:       mcpService,
+		ToolGroupService: toolGroupService,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to initialize config sync service: %w", err)
+	}
+	if err := configSyncService.Start(cmd.Context()); err != nil {
+		return fmt.Errorf("failed to start config sync service: %w", err)
+	}
+	defer configSyncService.Stop()
 
 	// create the API server
 	opts := &api.ServerOptions{
