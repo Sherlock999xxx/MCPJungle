@@ -30,6 +30,7 @@ type Options struct {
 	Dir     string
 }
 
+// Services groups the external services that the config sync service depends on to do its job.
 type Services struct {
 	DB               *gorm.DB
 	MCPService       *mcp.MCPService
@@ -49,17 +50,20 @@ func New(opts Options, services Services) (*Service, error) {
 	if services.DB == nil || services.MCPService == nil || services.ToolGroupService == nil {
 		return nil, fmt.Errorf("config sync requires DB, MCP service and ToolGroup service")
 	}
-	if !opts.Enabled {
-		return &Service{opts: opts, services: services}, nil
+	if opts.Dir == "" {
+		return nil, fmt.Errorf("config sync requires a directory to watch")
 	}
 	return &Service{opts: opts, services: services}, nil
 }
 
+// Start begins watching the config directory for changes in the background and reconciling them with mcpjungle.
+// It also performs an initial reconciliation on startup.
+// If config sync is not enabled, this method is a no-op.
 func (s *Service) Start(ctx context.Context) error {
 	if !s.opts.Enabled {
 		return nil
 	}
-	if err := ensureSubDirs(s.opts.Dir); err != nil {
+	if err := s.ensureSubDirs(); err != nil {
 		return err
 	}
 	if err := s.Reconcile(ctx); err != nil {
@@ -105,6 +109,8 @@ func (s *Service) Stop() {
 	}
 }
 
+// watchLoop listens for file system events from the watcher.
+// It is intended to be run in the background.
 func (s *Service) watchLoop(ctx context.Context) {
 	defer s.wg.Done()
 	debounce := time.NewTimer(time.Hour)
@@ -141,13 +147,15 @@ func (s *Service) watchLoop(ctx context.Context) {
 	}
 }
 
+// isRelevantEvent filters fsnotify events to only those that are relevant for triggering a reconciliation.
+// We only care when a file is created, modified, removed, or renamed.
 func isRelevantEvent(ev fsnotify.Event) bool {
 	return ev.Op&(fsnotify.Create|fsnotify.Write|fsnotify.Remove|fsnotify.Rename) != 0
 }
 
 // ensureSubDirs creates the expected subdirectories if they don't already exist.
 // This ensures that the directories exist before syncing process begins.
-func ensureSubDirs(root string) error {
+func (s *Service) ensureSubDirs() error {
 	subDirs := []string{
 		types.ConfigSyncMcpServersDirName,
 		types.ConfigSyncMcpClientsDirName,
@@ -155,7 +163,7 @@ func ensureSubDirs(root string) error {
 		types.ConfigSyncUsersDirName,
 	}
 	for _, sub := range subDirs {
-		if err := os.MkdirAll(filepath.Join(root, sub), 0o755); err != nil {
+		if err := os.MkdirAll(filepath.Join(s.opts.Dir, sub), 0o755); err != nil {
 			return fmt.Errorf("failed to create config subdirectory %s: %w", sub, err)
 		}
 	}
