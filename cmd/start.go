@@ -322,6 +322,8 @@ func getSessionIdleTimeout() (int, error) {
 	return timeout, nil
 }
 
+// getConfigSyncEnabled returns true if config directory sync is enabled via the flag or environment variable,
+// false otherwise.
 func getConfigSyncEnabled() bool {
 	if startServerCmdConfigSyncEnabled {
 		return true
@@ -330,6 +332,10 @@ func getConfigSyncEnabled() bool {
 	return v == "1" || v == "true"
 }
 
+// getConfigSyncDir returns the directory to be used for config sync, based on the following precedence:
+// 1. Command line flag
+// 2. Environment variable
+// 3. Default value (~/.mcpjungle)
 func getConfigSyncDir() string {
 	if strings.TrimSpace(startServerCmdConfigDir) != "" {
 		return strings.TrimSpace(startServerCmdConfigDir)
