@@ -29,17 +29,18 @@ import (
 	"github.com/mcpjungle/mcpjungle/internal/service/toolgroup"
 	"github.com/mcpjungle/mcpjungle/internal/service/user"
 	"github.com/mcpjungle/mcpjungle/internal/telemetry"
+	"github.com/mcpjungle/mcpjungle/pkg/types"
 	"github.com/spf13/cobra"
 )
 
 const (
-	BindPortEnvVar           = "PORT"
-	BindPortDefault          = "8080"
-	DefaultConfigSyncDirName = ".mcpjungle"
+	BindPortEnvVar  = "PORT"
+	BindPortDefault = "8080"
 
-	DBUrlEnvVar             = "DATABASE_URL"
-	ServerModeEnvVar        = "SERVER_MODE"
-	TelemetryEnabledEnvVar  = "OTEL_ENABLED"
+	DBUrlEnvVar            = "DATABASE_URL"
+	ServerModeEnvVar       = "SERVER_MODE"
+	TelemetryEnabledEnvVar = "OTEL_ENABLED"
+
 	ConfigSyncEnabledEnvVar = "MCPJUNGLE_CONFIG_SYNC_ENABLED"
 	ConfigSyncDirEnvVar     = "MCPJUNGLE_CONFIG_DIR"
 )
@@ -346,9 +347,9 @@ func getConfigSyncDir() string {
 	}
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
-		return filepath.Join("~", DefaultConfigSyncDirName)
+		return filepath.Join("~", types.DefaultConfigSyncDirName)
 	}
-	return filepath.Join(homeDir, DefaultConfigSyncDirName)
+	return filepath.Join(homeDir, types.DefaultConfigSyncDirName)
 }
 
 func runStartServer(cmd *cobra.Command, args []string) error {

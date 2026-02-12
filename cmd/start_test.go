@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/mcpjungle/mcpjungle/pkg/types"
 )
 
 func TestStartCommandStructure(t *testing.T) {
@@ -360,7 +362,7 @@ func TestGetConfigSyncDir(t *testing.T) {
 			if err != nil {
 				t.Fatalf("failed to get user home dir: %v", err)
 			}
-			expected := filepath.Join(home, DefaultConfigSyncDirName)
+			expected := filepath.Join(home, types.DefaultConfigSyncDirName)
 			if got := getConfigSyncDir(); got != expected {
 				t.Fatalf("expected default dir %s, got %s", expected, got)
 			}

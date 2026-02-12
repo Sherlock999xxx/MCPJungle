@@ -24,13 +24,6 @@ import (
 	"gorm.io/gorm"
 )
 
-const (
-	entityMcpServer = "mcp_server"
-	entityMcpClient = "mcp_client"
-	entityGroup     = "group"
-	entityUser      = "user"
-)
-
 // Options configures config directory synchronization.
 type Options struct {
 	Enabled bool
@@ -47,8 +40,6 @@ type Service struct {
 	opts     Options
 	services Services
 
-	resolvedDir string
-
 	watcher *fsnotify.Watcher
 	cancel  context.CancelFunc
 	wg      sync.WaitGroup
@@ -61,41 +52,14 @@ func New(opts Options, services Services) (*Service, error) {
 	if !opts.Enabled {
 		return &Service{opts: opts, services: services}, nil
 	}
-	resolved, err := resolveConfigDir(opts.Dir)
-	if err != nil {
-		return nil, err
-	}
-	return &Service{opts: opts, services: services, resolvedDir: resolved}, nil
-}
-
-func resolveConfigDir(dir string) (string, error) {
-	target := strings.TrimSpace(dir)
-	if target == "" {
-		target = "~/.mcpjungle"
-	}
-	if strings.HasPrefix(target, "~") {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return "", err
-		}
-		if target == "~" {
-			target = home
-		} else if strings.HasPrefix(target, "~/") {
-			target = filepath.Join(home, target[2:])
-		}
-	}
-	abs, err := filepath.Abs(target)
-	if err != nil {
-		return "", err
-	}
-	return filepath.Clean(abs), nil
+	return &Service{opts: opts, services: services}, nil
 }
 
 func (s *Service) Start(ctx context.Context) error {
 	if !s.opts.Enabled {
 		return nil
 	}
-	if err := ensureSubDirs(s.resolvedDir); err != nil {
+	if err := ensureSubDirs(s.opts.Dir); err != nil {
 		return err
 	}
 	if err := s.Reconcile(ctx); err != nil {
@@ -108,11 +72,11 @@ func (s *Service) Start(ctx context.Context) error {
 	}
 	s.watcher = watcher
 	for _, d := range []string{
-		s.resolvedDir,
-		filepath.Join(s.resolvedDir, "mcp_servers"),
-		filepath.Join(s.resolvedDir, "mcp_clients"),
-		filepath.Join(s.resolvedDir, "groups"),
-		filepath.Join(s.resolvedDir, "users"),
+		s.opts.Dir,
+		filepath.Join(s.opts.Dir, types.ConfigSyncMcpServersDirName),
+		filepath.Join(s.opts.Dir, types.ConfigSyncMcpClientsDirName),
+		filepath.Join(s.opts.Dir, types.ConfigSyncGroupsDirName),
+		filepath.Join(s.opts.Dir, types.ConfigSyncGroupsDirName),
 	} {
 		if err := watcher.Add(d); err != nil {
 			_ = watcher.Close()
@@ -128,6 +92,10 @@ func (s *Service) Start(ctx context.Context) error {
 }
 
 func (s *Service) Stop() {
+	// if config wasn't enabled to begin with, there's nothing to stop
+	if !s.opts.Enabled {
+		return
+	}
 	if s.cancel != nil {
 		s.cancel()
 	}
@@ -177,8 +145,16 @@ func isRelevantEvent(ev fsnotify.Event) bool {
 	return ev.Op&(fsnotify.Create|fsnotify.Write|fsnotify.Remove|fsnotify.Rename) != 0
 }
 
+// ensureSubDirs creates the expected subdirectories if they don't already exist.
+// This ensures that the directories exist before syncing process begins.
 func ensureSubDirs(root string) error {
-	for _, sub := range []string{"mcp_servers", "mcp_clients", "groups", "users"} {
+	subDirs := []string{
+		types.ConfigSyncMcpServersDirName,
+		types.ConfigSyncMcpClientsDirName,
+		types.ConfigSyncGroupsDirName,
+		types.ConfigSyncUsersDirName,
+	}
+	for _, sub := range subDirs {
 		if err := os.MkdirAll(filepath.Join(root, sub), 0o755); err != nil {
 			return fmt.Errorf("failed to create config subdirectory %s: %w", sub, err)
 		}
@@ -265,7 +241,7 @@ func loadDesired[T any](dir string, nameFn func(T) string) (map[string]desiredFi
 	return result, blocked, errs
 }
 
-func (s *Service) loadManaged(entityType string) (map[string]model.ManagedConfigFile, error) {
+func (s *Service) loadManaged(entityType model.EntityType) (map[string]model.ManagedConfigFile, error) {
 	var rows []model.ManagedConfigFile
 	if err := s.services.DB.Where("entity_type = ?", entityType).Find(&rows).Error; err != nil {
 		return nil, err
@@ -285,7 +261,7 @@ func toJSON(v any) (datatypes.JSON, error) {
 	return datatypes.JSON(b), nil
 }
 
-func (s *Service) createOrUpdateManagedRow(entityType, name, path, hash string) error {
+func (s *Service) createOrUpdateManagedRow(entityType model.EntityType, name, path, hash string) error {
 	var row model.ManagedConfigFile
 	err := s.services.DB.Where("entity_type = ? AND entity_name = ?", entityType, name).First(&row).Error
 	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
@@ -304,13 +280,13 @@ func (s *Service) createOrUpdateManagedRow(entityType, name, path, hash string) 
 	return s.services.DB.Save(&row).Error
 }
 
-func (s *Service) deleteManagedRow(entityType, name string) error {
+func (s *Service) deleteManagedRow(entityType model.EntityType, name string) error {
 	return s.services.DB.Unscoped().Where("entity_type = ? AND entity_name = ?", entityType, name).Delete(&model.ManagedConfigFile{}).Error
 }
 
 func (s *Service) reconcileMcpServers(ctx context.Context) error {
-	desired, blocked, parseErrs := loadDesired[types.RegisterServerInput](filepath.Join(s.resolvedDir, "mcp_servers"), func(i types.RegisterServerInput) string { return i.Name })
-	managed, err := s.loadManaged(entityMcpServer)
+	desired, blocked, parseErrs := loadDesired[types.RegisterServerInput](filepath.Join(s.opts.Dir, types.ConfigSyncMcpServersDirName), func(i types.RegisterServerInput) string { return i.Name })
+	managed, err := s.loadManaged(model.EntityTypeMcpServer)
 	if err != nil {
 		return fmt.Errorf("failed to load tracked mcp server configs: %w", err)
 	}
@@ -346,7 +322,7 @@ func (s *Service) reconcileMcpServers(ctx context.Context) error {
 				errs = append(errs, fmt.Errorf("failed to create mcp server %s from %s: %w", name, d.path, err))
 				continue
 			}
-			if err := s.createOrUpdateManagedRow(entityMcpServer, name, d.path, d.hash); err != nil {
+			if err := s.createOrUpdateManagedRow(model.EntityTypeMcpServer, name, d.path, d.hash); err != nil {
 				errs = append(errs, fmt.Errorf("failed to track mcp server %s: %w", name, err))
 			}
 			continue
@@ -372,7 +348,7 @@ func (s *Service) reconcileMcpServers(ctx context.Context) error {
 				continue
 			}
 		}
-		if err := s.createOrUpdateManagedRow(entityMcpServer, name, d.path, d.hash); err != nil {
+		if err := s.createOrUpdateManagedRow(model.EntityTypeMcpServer, name, d.path, d.hash); err != nil {
 			errs = append(errs, fmt.Errorf("failed to track mcp server %s: %w", name, err))
 		}
 	}
@@ -388,7 +364,7 @@ func (s *Service) reconcileMcpServers(ctx context.Context) error {
 			errs = append(errs, fmt.Errorf("failed to delete managed mcp server %s after file removal: %w", name, err))
 			continue
 		}
-		if err := s.deleteManagedRow(entityMcpServer, name); err != nil {
+		if err := s.deleteManagedRow(model.EntityTypeMcpServer, name); err != nil {
 			errs = append(errs, fmt.Errorf("failed to remove tracking for mcp server %s: %w", name, err))
 		}
 	}
@@ -415,8 +391,8 @@ func serverEqual(a, b *model.McpServer) bool {
 }
 
 func (s *Service) reconcileMcpClients() error {
-	desired, blocked, parseErrs := loadDesired[types.McpClientConfig](filepath.Join(s.resolvedDir, "mcp_clients"), func(i types.McpClientConfig) string { return i.Name })
-	managed, err := s.loadManaged(entityMcpClient)
+	desired, blocked, parseErrs := loadDesired[types.McpClientConfig](filepath.Join(s.opts.Dir, types.ConfigSyncMcpClientsDirName), func(i types.McpClientConfig) string { return i.Name })
+	managed, err := s.loadManaged(model.EntityTypeMcpClient)
 	if err != nil {
 		return err
 	}
@@ -466,7 +442,7 @@ func (s *Service) reconcileMcpClients() error {
 				}
 			}
 		}
-		if err := s.createOrUpdateManagedRow(entityMcpClient, name, d.path, d.hash); err != nil {
+		if err := s.createOrUpdateManagedRow(model.EntityTypeMcpClient, name, d.path, d.hash); err != nil {
 			errs = append(errs, fmt.Errorf("failed to track mcp client %s: %w", name, err))
 		}
 	}
@@ -482,7 +458,7 @@ func (s *Service) reconcileMcpClients() error {
 			errs = append(errs, fmt.Errorf("failed to delete managed mcp client %s after file removal: %w", name, err))
 			continue
 		}
-		if err := s.deleteManagedRow(entityMcpClient, name); err != nil {
+		if err := s.deleteManagedRow(model.EntityTypeMcpClient, name); err != nil {
 			errs = append(errs, fmt.Errorf("failed to remove tracking for mcp client %s: %w", name, err))
 		}
 	}
@@ -493,8 +469,8 @@ func (s *Service) reconcileMcpClients() error {
 }
 
 func (s *Service) reconcileGroups() error {
-	desired, blocked, parseErrs := loadDesired[types.ToolGroup](filepath.Join(s.resolvedDir, "groups"), func(i types.ToolGroup) string { return i.Name })
-	managed, err := s.loadManaged(entityGroup)
+	desired, blocked, parseErrs := loadDesired[types.ToolGroup](filepath.Join(s.opts.Dir, types.ConfigSyncGroupsDirName), func(i types.ToolGroup) string { return i.Name })
+	managed, err := s.loadManaged(model.EntityTypeGroup)
 	if err != nil {
 		return err
 	}
@@ -538,7 +514,7 @@ func (s *Service) reconcileGroups() error {
 				}
 			}
 		}
-		if err := s.createOrUpdateManagedRow(entityGroup, name, d.path, d.hash); err != nil {
+		if err := s.createOrUpdateManagedRow(model.EntityTypeGroup, name, d.path, d.hash); err != nil {
 			errs = append(errs, fmt.Errorf("failed to track group %s: %w", name, err))
 		}
 	}
@@ -553,7 +529,7 @@ func (s *Service) reconcileGroups() error {
 			errs = append(errs, fmt.Errorf("failed to delete managed group %s after file removal: %w", name, err))
 			continue
 		}
-		if err := s.deleteManagedRow(entityGroup, name); err != nil {
+		if err := s.deleteManagedRow(model.EntityTypeGroup, name); err != nil {
 			errs = append(errs, fmt.Errorf("failed to remove tracking for group %s: %w", name, err))
 		}
 	}
@@ -568,8 +544,8 @@ func groupEqual(a, b *model.ToolGroup) bool {
 }
 
 func (s *Service) reconcileUsers() error {
-	desired, blocked, parseErrs := loadDesired[types.UserConfig](filepath.Join(s.resolvedDir, "users"), func(i types.UserConfig) string { return i.Username })
-	managed, err := s.loadManaged(entityUser)
+	desired, blocked, parseErrs := loadDesired[types.UserConfig](filepath.Join(s.opts.Dir, types.ConfigSyncUsersDirName), func(i types.UserConfig) string { return i.Username })
+	managed, err := s.loadManaged(model.EntityTypeUser)
 	if err != nil {
 		return err
 	}
@@ -612,7 +588,7 @@ func (s *Service) reconcileUsers() error {
 			}
 		}
 
-		if err := s.createOrUpdateManagedRow(entityUser, name, d.path, d.hash); err != nil {
+		if err := s.createOrUpdateManagedRow(model.EntityTypeUser, name, d.path, d.hash); err != nil {
 			errs = append(errs, fmt.Errorf("failed to track user %s: %w", name, err))
 		}
 	}
@@ -626,7 +602,7 @@ func (s *Service) reconcileUsers() error {
 		var user model.User
 		if err := s.services.DB.Where("username = ?", name).First(&user).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
-				_ = s.deleteManagedRow(entityUser, name)
+				_ = s.deleteManagedRow(model.EntityTypeUser, name)
 				continue
 			}
 			errs = append(errs, fmt.Errorf("failed to fetch managed user %s during deletion: %w", name, err))
@@ -640,7 +616,7 @@ func (s *Service) reconcileUsers() error {
 			errs = append(errs, fmt.Errorf("failed to delete managed user %s after file removal: %w", name, err))
 			continue
 		}
-		if err := s.deleteManagedRow(entityUser, name); err != nil {
+		if err := s.deleteManagedRow(model.EntityTypeUser, name); err != nil {
 			errs = append(errs, fmt.Errorf("failed to remove tracking for user %s: %w", name, err))
 		}
 	}

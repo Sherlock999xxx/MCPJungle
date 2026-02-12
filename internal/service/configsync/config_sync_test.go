@@ -25,16 +25,6 @@ func newTestDB(t *testing.T) *gorm.DB {
 	return db
 }
 
-func TestResolveConfigDir(t *testing.T) {
-	d, err := resolveConfigDir("~/.mcpjungle")
-	if err != nil {
-		t.Fatalf("unexpected err: %v", err)
-	}
-	if !filepath.IsAbs(d) {
-		t.Fatalf("expected absolute path, got %s", d)
-	}
-}
-
 func TestReconcileUsers_AdminUserIsRejected(t *testing.T) {
 	db := newTestDB(t)
 	tmp := t.TempDir()
@@ -49,7 +39,7 @@ func TestReconcileUsers_AdminUserIsRejected(t *testing.T) {
 		t.Fatalf("write file: %v", err)
 	}
 
-	s := &Service{services: Services{DB: db}, resolvedDir: tmp}
+	s := &Service{services: Services{DB: db}, opts: Options{Dir: tmp}}
 	err := s.reconcileUsers()
 	if err == nil {
 		t.Fatal("expected error")
@@ -59,7 +49,7 @@ func TestReconcileUsers_AdminUserIsRejected(t *testing.T) {
 	}
 
 	var tracked []model.ManagedConfigFile
-	if err := db.Where("entity_type = ?", entityUser).Find(&tracked).Error; err != nil {
+	if err := db.Where("entity_type = ?", model.EntityTypeUser).Find(&tracked).Error; err != nil {
 		t.Fatalf("query tracked: %v", err)
 	}
 	if len(tracked) != 0 {
@@ -81,7 +71,7 @@ func TestReconcileUsers_AdoptsExistingManualUser(t *testing.T) {
 		t.Fatalf("write file: %v", err)
 	}
 
-	s := &Service{services: Services{DB: db}, resolvedDir: tmp}
+	s := &Service{services: Services{DB: db}, opts: Options{Dir: tmp}}
 	if err := s.reconcileUsers(); err != nil {
 		t.Fatalf("reconcile users: %v", err)
 	}
@@ -95,7 +85,7 @@ func TestReconcileUsers_AdoptsExistingManualUser(t *testing.T) {
 	}
 
 	var tracked model.ManagedConfigFile
-	if err := db.Where("entity_type = ? AND entity_name = ?", entityUser, "alice").First(&tracked).Error; err != nil {
+	if err := db.Where("entity_type = ? AND entity_name = ?", model.EntityTypeUser, "alice").First(&tracked).Error; err != nil {
 		t.Fatalf("fetch tracking row: %v", err)
 	}
 	if tracked.FilePath == "" || tracked.FileHash == "" {
